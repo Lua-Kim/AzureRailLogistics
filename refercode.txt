@@ -1,0 +1,522 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Layout, Settings, Activity, Monitor, Zap, Database, Cpu, Users, 
+  Box, Terminal, BrainCircuit, Loader2, Save, 
+  TrendingDown, ShoppingCart, RotateCcw, Truck, Play, Pause, 
+  Thermometer, Wind, Maximize, Minimize, ChevronRight, Plus, Trash2, Server, Link2
+} from 'lucide-react';
+
+/**
+ * SROC Topology Master Portal v12.4
+ * ---------------------------------------
+ * [업데이트 사항]
+ * 1. System Settings 구현: SQL Server, Kafka, Database 연결 설정 인터페이스 추가.
+ * 2. 상태 관리 연동: 각 설정값의 실시간 입력 및 관리 기능.
+ * 3. UI 일관성: Styled Object(S)를 활용한 다크 모드 제어반 디자인 유지.
+ */
+
+// --- [Styled Components Mockup / Style Objects] ---
+const S = {
+  Container: {
+    minHeight: '100vh',
+    backgroundColor: '#040508',
+    color: '#e2e8f0',
+    fontFamily: '-apple-system, sans-serif',
+    display: 'flex',
+    overflow: 'hidden',
+    transition: 'all 0.5s ease',
+  },
+  Fullscreen: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 9999,
+  },
+  Sidebar: {
+    width: '96px',
+    backgroundColor: '#0b0e14',
+    borderRight: '1px solid #1e293b',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    padding: '40px 0',
+    gap: '32px',
+    flexShrink: 0,
+    zIndex: 100,
+  },
+  Main: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: '40px',
+    backgroundImage: `radial-gradient(circle at top right, #1e293b 0%, transparent 45%), 
+                      radial-gradient(circle at bottom left, #0f172a 0%, transparent 45%)`,
+    position: 'relative',
+  },
+  KpiCard: {
+    background: 'rgba(15, 23, 42, 0.8)',
+    padding: '20px',
+    borderRadius: '20px',
+    border: '1px solid #1e293b',
+    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+  },
+  AiBanner: {
+    backgroundColor: 'rgba(37, 99, 235, 0.1)',
+    border: '1px solid rgba(37, 99, 235, 0.3)',
+    padding: '20px',
+    borderRadius: '20px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '24px',
+  },
+  ZoneRow: {
+    display: 'grid',
+    gridTemplateColumns: '80px 1fr 180px 120px 120px 60px',
+    padding: '16px 24px',
+    background: '#0f172a',
+    border: '1px solid #1e293b',
+    borderRadius: '16px',
+    marginBottom: '8px',
+    alignItems: 'center',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+  },
+  StatusBadge: (status) => ({
+    padding: '4px 10px',
+    borderRadius: '8px',
+    fontSize: '9px',
+    fontWeight: 900,
+    textTransform: 'uppercase',
+    border: '1px solid',
+    backgroundColor: status === 'critical' ? 'rgba(239, 68, 68, 0.1)' : 
+                     status === 'warning' ? 'rgba(245, 158, 11, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+    color: status === 'critical' ? '#ef4444' : 
+           status === 'warning' ? '#f59e0b' : '#10b981',
+    borderColor: status === 'critical' ? 'rgba(239, 68, 68, 0.2)' : 
+                 status === 'warning' ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+  }),
+  EditorGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+    gap: '20px',
+  },
+  EditCard: {
+    background: 'rgba(15, 23, 42, 0.6)',
+    border: '1px solid #1e293b',
+    borderRadius: '24px',
+    padding: '24px',
+    position: 'relative',
+  },
+  InputGroup: {
+    marginBottom: '16px',
+  },
+  Label: {
+    display: 'block',
+    fontSize: '10px',
+    fontWeight: 900,
+    color: '#64748b',
+    textTransform: 'uppercase',
+    marginBottom: '6px',
+    letterSpacing: '0.05em',
+  },
+  Input: {
+    width: '100%',
+    backgroundColor: '#040508',
+    border: '1px solid #334155',
+    borderRadius: '8px',
+    padding: '10px 12px',
+    color: '#f8fafc',
+    fontSize: '13px',
+    outline: 'none',
+    boxSizing: 'border-box',
+  },
+  SettingsSection: {
+    background: 'rgba(15, 23, 42, 0.4)',
+    borderRadius: '32px',
+    border: '1px solid #1e293b',
+    padding: '32px',
+    marginBottom: '24px',
+  }
+};
+
+const SmartLogisticsDashboard = () => {
+  const [currentTab, setCurrentTab] = useState('macro'); 
+  const [selectedZoneId, setSelectedZoneId] = useState('PK-01');
+  const [aiInsight, setAiInsight] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isPlaybackMode, setIsPlaybackMode] = useState(false);
+  const [playbackIndex, setPlaybackIndex] = useState(0);
+  const [isPseudoFullscreen, setIsPseudoFullscreen] = useState(false);
+  
+  const apiKey = ""; 
+
+  // --- [Data State] ---
+  const [config, setConfig] = useState({
+    zones: [
+      { id: 'IN-01', name: 'Inbound Dock', type: 'entry', lines: 2, length: 15, workers: 4, status: 'normal', load: 45, temp: 32, vib: 1.2 },
+      { id: 'SR-01', name: 'Sorter Alpha', type: 'process', lines: 4, length: 30, workers: 2, status: 'warning', load: 72, temp: 48, vib: 3.8 },
+      { id: 'BF-01', name: 'Storage Buffer', type: 'buffer', lines: 1, length: 50, workers: 1, status: 'normal', load: 20, temp: 28, vib: 0.5 },
+      { id: 'PK-01', name: 'Picking Zone', type: 'process', lines: 3, length: 20, workers: 8, status: 'critical', load: 92, temp: 55, vib: 5.2 },
+      { id: 'OT-01', name: 'Outbound', type: 'exit', lines: 2, length: 15, workers: 3, status: 'normal', load: 55, temp: 35, vib: 1.5 },
+    ]
+  });
+
+  const [sysSettings, setSysSettings] = useState({
+    sql: { host: 'sroc-primary.internal', port: '1433', db: 'SROC_LOG_DB', user: 'sa' },
+    kafka: { brokers: 'k-cluster-01:9092,k-cluster-02:9092', topic: 'telemetry.sensor.v2' },
+    db: { poolSize: '20', timeout: '30000', dialect: 'mssql' }
+  });
+
+  const [history, setHistory] = useState([]); 
+  const [kpiMetrics, setKpiMetrics] = useState({
+    orders: 12450, returns: 840, unloading: 5200, speed: 1.38, utilization: 84, loss: 7.53
+  });
+
+  const currentData = isPlaybackMode ? history[playbackIndex] || config : config;
+  const selectedZone = currentData.zones.find(z => z.id === selectedZoneId) || currentData.zones[0];
+
+  // --- [Update Functions] ---
+  const handleZoneUpdate = (id, field, value) => {
+    setConfig(prev => ({
+      ...prev,
+      zones: prev.zones.map(z => z.id === id ? { ...z, [field]: value } : z)
+    }));
+  };
+
+  const handleSysUpdate = (category, field, value) => {
+    setSysSettings(prev => ({
+      ...prev,
+      [category]: { ...prev[category], [field]: value }
+    }));
+  };
+
+  // --- [Simulation Logic] ---
+  useEffect(() => {
+    if (isPlaybackMode) return;
+    const interval = setInterval(() => {
+      setConfig(prev => {
+        const nextZones = prev.zones.map(z => {
+          const nextLoad = Math.max(10, Math.min(100, z.load + (Math.random() - 0.5) * 6));
+          return {
+            ...z,
+            load: nextLoad,
+            temp: 30 + (nextLoad / 2.5),
+            status: nextLoad > 88 ? 'critical' : nextLoad > 70 ? 'warning' : 'normal'
+          };
+        });
+        const newState = { ...prev, zones: nextZones, timestamp: new Date().toLocaleTimeString() };
+        setHistory(h => [newState, ...h].slice(0, 40));
+        return newState;
+      });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [isPlaybackMode]);
+
+  const generateAIInsight = async () => {
+    setIsGenerating(true);
+    setTimeout(() => {
+      setAiInsight("현재 연결된 Kafka 스트림 데이터의 지연 시간이 정상 범위 내에 있습니다.");
+      setIsGenerating(false);
+    }, 1500);
+  };
+
+  // --- [Views] ---
+
+  const KpiSection = () => (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+      {[
+        { label: 'Today Orders', value: kpiMetrics.orders.toLocaleString(), color: '#60a5fa', icon: <ShoppingCart size={16}/> },
+        { label: 'Returns', value: kpiMetrics.returns.toLocaleString(), color: '#fbbf24', icon: <RotateCcw size={16}/> },
+        { label: 'Unloading', value: kpiMetrics.unloading.toLocaleString(), color: '#10b981', icon: <Truck size={16}/> },
+        { label: 'Loss Estimate', value: `₩${kpiMetrics.loss}M`, color: '#ef4444', icon: <TrendingDown size={16}/> },
+      ].map((kpi, i) => (
+        <div key={i} style={S.KpiCard}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '10px', fontWeight: 900, color: '#64748b', textTransform: 'uppercase' }}>{kpi.label}</span>
+            <div style={{ padding: '6px', borderRadius: '8px', backgroundColor: '#1e293b', color: kpi.color }}>{kpi.icon}</div>
+          </div>
+          <p style={{ fontSize: '24px', fontWeight: 900, fontFamily: 'monospace', margin: 0 }}>{kpi.value}</p>
+        </div>
+      ))}
+    </div>
+  );
+
+  const MacroView = () => (
+    <div>
+      <KpiSection />
+      <div style={S.AiBanner}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div style={{ backgroundColor: '#2563eb', padding: '10px', borderRadius: '16px' }}><BrainCircuit color="white" size={24} /></div>
+          <div>
+            <h4 style={{ fontSize: '9px', fontWeight: 900, color: '#60a5fa', textTransform: 'uppercase', margin: 0 }}>AI Operations Advisor</h4>
+            <p style={{ fontSize: '13px', color: '#cbd5e1', fontWeight: 'bold', margin: '4px 0 0' }}>{aiInsight || "실시간 분석 대기 중..."}</p>
+          </div>
+        </div>
+        <button 
+          style={{ background: '#2563eb', color: 'white', border: 'none', padding: '10px 24px', borderRadius: '12px', fontWeight: 900, cursor: 'pointer' }}
+          onClick={generateAIInsight} disabled={isGenerating}
+        >
+          {isGenerating ? <Loader2 className="animate-spin" size={14}/> : 'ANALYZE'}
+        </button>
+      </div>
+
+      <div style={{ background: 'rgba(15, 23, 42, 0.4)', borderRadius: '32px', border: '1px solid #1e293b', padding: '24px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr 180px 120px 120px 60px', padding: '16px 24px', fontSize: '10px', fontWeight: 900, color: '#64748b', borderBottom: '1px solid #1e293b', marginBottom: '8px' }}>
+          <span>UID</span><span>Zone Information</span><span>Load Level</span><span>Temperature</span><span>Status</span><span></span>
+        </div>
+        {currentData.zones.map(zone => (
+          <div key={zone.id} style={S.ZoneRow} onClick={() => { setSelectedZoneId(zone.id); setCurrentTab('micro'); }}>
+            <span style={{ fontFamily: 'monospace', fontWeight: 900, color: '#3b82f6' }}>{zone.id}</span>
+            <div style={{ fontWeight: 900, fontSize: '14px' }}>{zone.name}</div>
+            <div style={{ paddingRight: '20px' }}>
+              <div style={{ fontSize: '10px', fontWeight: 900, marginBottom: '2px', color: zone.load > 85 ? '#ef4444' : '#94a3b8' }}>{Math.round(zone.load)}%</div>
+              <div style={{ width: '100%', height: '6px', background: '#020617', borderRadius: '3px', overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${zone.load}%`, background: zone.status === 'critical' ? '#ef4444' : zone.status === 'warning' ? '#f59e0b' : '#3b82f6', transition: 'width 0.5s ease' }} />
+              </div>
+            </div>
+            <div style={{ fontWeight: 700, color: zone.temp > 50 ? '#ef4444' : '#f8fafc' }}>{zone.temp.toFixed(1)}°C</div>
+            <div><span style={S.StatusBadge(zone.status)}>{zone.status}</span></div>
+            <div style={{ textAlign: 'right', color: '#475569' }}><ChevronRight size={18} /></div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const MicroView = () => (
+    <div style={{ animation: 'fadeIn 0.5s ease' }}>
+      <div style={{ borderBottom: '1px solid #1e293b', paddingBottom: '24px', marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+        <div>
+          <h2 style={{ fontSize: '20px', fontWeight: 900, fontStyle: 'italic', margin: 0 }}>{selectedZone.name} <span style={{ color: '#3b82f6', fontStyle: 'normal' }}>DIAGNOSTICS</span></h2>
+          <p style={{ fontSize: '10px', color: '#64748b', fontWeight: 900, letterSpacing: '0.2em', marginTop: '8px' }}>{selectedZone.id} | TELEMETRY STREAM</p>
+        </div>
+      </div>
+
+      <div style={{ background: '#020617', border: '1px solid #1e293b', borderRadius: '32px', padding: '32px', minHeight: '300px' }}>
+        <div style={{ fontSize: '10px', fontWeight: 900, color: '#64748b', marginBottom: '32px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Cpu size={16} color="#3b82f6" /> SENSOR PRECISION GRID ({selectedZone.lines} Lines x {selectedZone.length} Length)
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          {Array.from({length: selectedZone.lines}).map((_, lIdx) => (
+            <div key={lIdx} style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+              <span style={{ fontSize: '10px', fontWeight: 900, color: '#64748b', width: '60px' }}>LINE {lIdx + 1}</span>
+              <div style={{ flex: 1, height: '28px', display: 'flex', gap: '4px', overflowX: 'auto', paddingBottom: '4px' }}>
+                {Array.from({length: selectedZone.length}).map((_, sIdx) => (
+                  <div key={sIdx} style={{ minWidth: '10px', height: '100%', borderRadius: '4px', backgroundColor: (sIdx % 8 === 0 && selectedZone.status === 'critical') ? '#ef4444' : '#1e293b', transition: 'all 0.7s' }} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  const EditorView = () => (
+    <div style={{ animation: 'fadeIn 0.5s ease' }}>
+      <div style={{ marginBottom: '32px', borderBottom: '1px solid #1e293b', paddingBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h2 style={{ fontSize: '20px', fontWeight: 900, fontStyle: 'italic', margin: 0 }}>SYSTEM <span style={{ color: '#3b82f6', fontStyle: 'normal' }}>EDITOR</span></h2>
+          <p style={{ fontSize: '10px', color: '#64748b', fontWeight: 900, letterSpacing: '0.2em', marginTop: '8px' }}>TOPOLOGY & CAPACITY CONFIGURATION</p>
+        </div>
+        <button style={{ background: '#2563eb', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '12px', fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Save size={16} /> SYNC CHANGES
+        </button>
+      </div>
+
+      <div style={S.EditorGrid}>
+        {config.zones.map(zone => (
+          <div key={zone.id} style={S.EditCard}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <div style={{ fontSize: '14px', fontWeight: 900, color: '#3b82f6' }}>{zone.id}</div>
+              <Trash2 size={16} color="#475569" style={{ cursor: 'pointer' }} />
+            </div>
+
+            <div style={S.InputGroup}>
+              <label style={S.Label}>구획 이름 (Zone Name)</label>
+              <input 
+                style={S.Input} 
+                value={zone.name} 
+                onChange={(e) => handleZoneUpdate(zone.id, 'name', e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <div style={S.InputGroup}>
+                <label style={S.Label}>라인 개수 (Lines)</label>
+                <input 
+                  type="number" 
+                  style={S.Input} 
+                  value={zone.lines} 
+                  onChange={(e) => handleZoneUpdate(zone.id, 'lines', parseInt(e.target.value) || 0)}
+                />
+              </div>
+              <div style={S.InputGroup}>
+                <label style={S.Label}>라인 길이/센서 (Length)</label>
+                <input 
+                  type="number" 
+                  style={S.Input} 
+                  value={zone.length} 
+                  onChange={(e) => handleZoneUpdate(zone.id, 'length', parseInt(e.target.value) || 0)}
+                />
+              </div>
+            </div>
+
+            <div style={S.InputGroup}>
+              <label style={S.Label}>배치 인원 (Workers)</label>
+              <input 
+                type="number" 
+                style={S.Input} 
+                value={zone.workers} 
+                onChange={(e) => handleZoneUpdate(zone.id, 'workers', parseInt(e.target.value) || 0)}
+              />
+            </div>
+          </div>
+        ))}
+        
+        <div style={{ ...S.EditCard, borderStyle: 'dashed', borderColor: '#334155', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+          <div style={{ textAlign: 'center' }}>
+            <Plus size={32} color="#334155" style={{ marginBottom: '8px' }} />
+            <p style={{ fontSize: '10px', fontWeight: 900, color: '#334155', margin: 0 }}>ADD NEW SEGMENT</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const SettingsView = () => (
+    <div style={{ animation: 'fadeIn 0.5s ease' }}>
+      <div style={{ marginBottom: '32px', borderBottom: '1px solid #1e293b', paddingBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h2 style={{ fontSize: '20px', fontWeight: 900, fontStyle: 'italic', margin: 0 }}>SYSTEM <span style={{ color: '#3b82f6', fontStyle: 'normal' }}>SETTINGS</span></h2>
+          <p style={{ fontSize: '10px', color: '#64748b', fontWeight: 900, letterSpacing: '0.2em', marginTop: '8px' }}>CORE INFRASTRUCTURE CONNECTIVITY</p>
+        </div>
+        <button style={{ background: '#3b82f6', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '12px', fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Save size={16} /> APPLY SETTINGS
+        </button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+        {/* SQL Server Section */}
+        <div style={S.SettingsSection}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+            <Server size={20} color="#3b82f6" />
+            <span style={{ fontWeight: 900, fontSize: '14px' }}>SQL SERVER CONFIGURATION</span>
+          </div>
+          <div style={S.InputGroup}>
+            <label style={S.Label}>Host Address</label>
+            <input style={S.Input} value={sysSettings.sql.host} onChange={e => handleSysUpdate('sql', 'host', e.target.value)} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: '16px' }}>
+            <div style={S.InputGroup}>
+              <label style={S.Label}>Port</label>
+              <input style={S.Input} value={sysSettings.sql.port} onChange={e => handleSysUpdate('sql', 'port', e.target.value)} />
+            </div>
+            <div style={S.InputGroup}>
+              <label style={S.Label}>Database Name</label>
+              <input style={S.Input} value={sysSettings.sql.db} onChange={e => handleSysUpdate('sql', 'db', e.target.value)} />
+            </div>
+          </div>
+          <div style={S.InputGroup}>
+            <label style={S.Label}>Auth User</label>
+            <input style={S.Input} value={sysSettings.sql.user} onChange={e => handleSysUpdate('sql', 'user', e.target.value)} />
+          </div>
+        </div>
+
+        {/* Kafka Section */}
+        <div style={S.SettingsSection}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+            <Zap size={20} color="#fbbf24" />
+            <span style={{ fontWeight: 900, fontSize: '14px' }}>KAFKA STREAM CONFIGURATION</span>
+          </div>
+          <div style={S.InputGroup}>
+            <label style={S.Label}>Bootstrap Brokers (CSV)</label>
+            <textarea 
+              style={{ ...S.Input, height: '80px', resize: 'none' }} 
+              value={sysSettings.kafka.brokers} 
+              onChange={e => handleSysUpdate('kafka', 'brokers', e.target.value)}
+            />
+          </div>
+          <div style={S.InputGroup}>
+            <label style={S.Label}>Target Stream Topic</label>
+            <input style={S.Input} value={sysSettings.kafka.topic} onChange={e => handleSysUpdate('kafka', 'topic', e.target.value)} />
+          </div>
+        </div>
+
+        {/* DB Connection Pool Section */}
+        <div style={{ ...S.SettingsSection, gridColumn: 'span 2' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+            <Database size={20} color="#10b981" />
+            <span style={{ fontWeight: 900, fontSize: '14px' }}>DATA STORAGE & CONNECTION POOL</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '24px' }}>
+            <div style={S.InputGroup}>
+              <label style={S.Label}>Max Pool Size</label>
+              <input type="number" style={S.Input} value={sysSettings.db.poolSize} onChange={e => handleSysUpdate('db', 'poolSize', e.target.value)} />
+            </div>
+            <div style={S.InputGroup}>
+              <label style={S.Label}>Connection Timeout (ms)</label>
+              <input type="number" style={S.Input} value={sysSettings.db.timeout} onChange={e => handleSysUpdate('db', 'timeout', e.target.value)} />
+            </div>
+            <div style={S.InputGroup}>
+              <label style={S.Label}>Dialect</label>
+              <select style={S.Input} value={sysSettings.db.dialect} onChange={e => handleSysUpdate('db', 'dialect', e.target.value)}>
+                <option value="mssql">Microsoft SQL Server</option>
+                <option value="postgres">PostgreSQL</option>
+                <option value="mysql">MySQL / MariaDB</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ ...S.Container, ...(isPseudoFullscreen ? S.Fullscreen : {}) }}>
+      {/* Sidebar */}
+      <nav style={S.Sidebar}>
+        <div style={{ padding: '16px', background: '#2563eb', borderRadius: '16px', cursor: 'pointer' }} onClick={() => setCurrentTab('macro')}>
+          <Monitor size={28} color="white"/>
+        </div>
+        {['macro', 'micro', 'editor', 'settings'].map((tab) => (
+          <button 
+            key={tab} 
+            onClick={() => setCurrentTab(tab)} 
+            style={{ 
+              padding: '16px', borderRadius: '16px', background: currentTab === tab ? '#0f172a' : 'transparent', 
+              color: currentTab === tab ? '#60a5fa' : '#475569', border: 'none', cursor: 'pointer' 
+            }}
+          >
+            {tab === 'macro' ? <Layout size={24}/> : tab === 'micro' ? <Activity size={24}/> : tab === 'editor' ? <Box size={24}/> : <Settings size={24}/>}
+          </button>
+        ))}
+        <button onClick={() => setIsPseudoFullscreen(!isPseudoFullscreen)} style={{ marginTop: 'auto', background: 'transparent', border: 'none', color: '#475569', cursor: 'pointer' }}>
+          {isPseudoFullscreen ? <Minimize size={24}/> : <Maximize size={24}/>}
+        </button>
+      </nav>
+
+      {/* Main Content */}
+      <main style={S.Main}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', borderBottom: '1px solid rgba(30, 41, 59, 0.5)', paddingBottom: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+            <div style={{ padding: '12px', background: '#0f172a', borderRadius: '16px', border: '1px solid #1e293b' }}><Box size={32} color="#3b82f6" /></div>
+            <div>
+              <h1 style={{ fontSize: '24px', fontWeight: 900, color: '#ffffff', fontStyle: 'italic', margin: 0 }}>SROC <span style={{ color: '#3b82f6', fontStyle: 'normal' }}>PORTAL</span></h1>
+              <p style={{ fontSize: '10px', fontWeight: 800, color: '#64748b', letterSpacing: '0.4em', margin: '8px 0 0' }}>INTEGRATED HUB</p>
+            </div>
+          </div>
+          <div style={{ backgroundColor: '#0f172a', padding: '12px 24px', borderRadius: '16px', border: '1px solid #1e293b', fontSize: '10px', fontWeight: 900, color: '#94a3b8' }}>
+            <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#10b981', marginRight: '10px' }} /> LIVE
+          </div>
+        </header>
+
+        {currentTab === 'macro' && <MacroView />}
+        {currentTab === 'micro' && <MicroView />}
+        {currentTab === 'editor' && <EditorView />}
+        {currentTab === 'settings' && <SettingsView />}
+      </main>
+    </div>
+  );
+};
+
+export default SmartLogisticsDashboard;
