@@ -54,6 +54,17 @@ const LossCard = styled.div`
   p { color: ${props => props.theme.colors.status.danger}; font-size: 28px; font-weight: 900; margin: 0; font-family: 'monospace'; }
 `;
 
+const ZoneBadge = styled.span`
+  background-color: rgba(59, 130, 246, 0.15);
+  color: ${props => props.theme.colors.primary};
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  margin-left: 20px;
+`;
+
 const MetricsGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -145,8 +156,11 @@ const MicroPage = () => { // Renamed from LogisticsZoneAnalytics
       {/* 1. Header Section */}
       <TopHeader>
         <TitleSection>
-          <h2>Logistics Zone <span>ANALYTICS</span></h2>
-          <p>{zoneId} | {zoneName.toUpperCase()} | OPERATIONAL COST FOCUS</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+            <h2>Logistics Zone <span>ANALYTICS</span></h2>
+            <ZoneBadge>{zoneName}</ZoneBadge>
+          </div>
+          <p>{zoneId} | OPERATIONAL COST FOCUS</p>
         </TitleSection>
         <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'inherit', padding: '8px 16px', borderRadius: '20px', border: `1px solid ${'#1e293b'}` }}>

@@ -141,7 +141,7 @@ const TitleText = styled.div`
   h1 {
     font-size: ${props => props.$compact ? '14px' : '24px'};
     font-weight: 900;
-    color: ${props => props.theme.colors.text.inverse};
+    color: ${props => props.theme.colors.text.main};
     font-style: italic;
     letter-spacing: -0.05em;
     margin: 0;

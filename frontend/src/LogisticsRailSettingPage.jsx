@@ -289,7 +289,7 @@ const LogisticsRailSettingPage = () => {
   return (
     <PageContainer>
       <PageHeader>
-        <PageTitle>레일 구획 <span>구성</span></PageTitle>
+        <PageTitle>Rail System <span>Configuration</span></PageTitle>
         <AddButton onClick={handleAdd}>
           <Plus size={18} />
           새 구획 추가
