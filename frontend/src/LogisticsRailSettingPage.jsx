@@ -17,7 +17,37 @@ const PageHeader = styled.div`
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 24px;
+`;
+
+const PresetContainer = styled.div`
+  display: flex;
+  gap: 12px;
   margin-bottom: 32px;
+  align-items: center;
+`;
+
+const PresetLabel = styled.p`
+  font-size: 14px;
+  font-weight: 700;
+  color: ${props => props.theme.colors.text.muted};
+`;
+
+const PresetButton = styled.button`
+  background-color: ${props => props.theme.colors.surface};
+  color: ${props => props.theme.colors.text.sub};
+  border: 1px solid ${props => props.theme.colors.border};
+  border-radius: ${props => props.theme.borderRadius};
+  padding: 8px 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s ease;
+
+  &:hover {
+    background-color: ${props => props.theme.colors.primary};
+    color: #fff;
+    border-color: ${props => props.theme.colors.primary};
+  }
 `;
 
 const PageTitle = styled.h2`
@@ -216,12 +246,33 @@ const ValidationError = styled.div`
 `;
 
 
-// --- [Initial Data] ---
-const initialZones = [
-  { id: 'PK-01', name: 'Picking Zone Alpha', lines: 3, length: 20, sensors: 38 },
-  { id: 'SR-01', name: 'Sorter Area', lines: 4, length: 30, sensors: 55 },
-  { id: 'OT-01', name: 'Outbound Staging', lines: 2, length: 15, sensors: 30 },
-];
+// --- [Initial Data & Presets] ---
+const presets = {
+  mfc: [
+    { id: 'MFC-PK', name: '도심 피킹', lines: 2, length: 20, sensors: 40 },
+    { id: 'MFC-SO', name: '패킹/출고', lines: 2, length: 15, sensors: 30 },
+  ],
+  tc: [
+    { id: 'TC-XD', name: '크로스도킹', lines: 4, length: 150, sensors: 200 },
+  ],
+  dc: [
+    { id: 'DC-IB', name: '입고', lines: 4, length: 40, sensors: 50 },
+    { id: 'DC-ST', name: '보관', lines: 10, length: 80, sensors: 150 },
+    { id: 'DC-PK', name: '피킹', lines: 8, length: 60, sensors: 120 },
+    { id: 'DC-OB', name: '출고', lines: 4, length: 40, sensors: 50 },
+  ],
+  megaFc: [
+    { id: 'IB-01', name: '입고', lines: 4, length: 50, sensors: 40 },
+    { id: 'IS-01', name: '검수', lines: 4, length: 30, sensors: 50 },
+    { id: 'ST-RC', name: '랙 보관', lines: 20, length: 120, sensors: 300 },
+    { id: 'PK-01', name: '피킹', lines: 12, length: 100, sensors: 200 },
+    { id: 'PC-01', name: '가공', lines: 3, length: 40, sensors: 50 },
+    { id: 'SR-01', name: '분류', lines: 8, length: 80, sensors: 160 },
+    { id: 'OB-01', name: '출고', lines: 4, length: 60, sensors: 40 },
+  ]
+};
+
+const initialZones = presets.megaFc;
 
 
 const LogisticsRailSettingPage = () => {
@@ -286,6 +337,10 @@ const LogisticsRailSettingPage = () => {
   };
 
 
+  const handlePresetClick = (presetKey) => {
+    setZones(presets[presetKey]);
+  };
+
   return (
     <PageContainer>
       <PageHeader>
@@ -295,6 +350,14 @@ const LogisticsRailSettingPage = () => {
           새 구획 추가
         </AddButton>
       </PageHeader>
+
+      <PresetContainer>
+        <PresetLabel>기능별 프리셋:</PresetLabel>
+        <PresetButton onClick={() => handlePresetClick('mfc')}>소형/도심 MFC</PresetButton>
+        <PresetButton onClick={() => handlePresetClick('tc')}>통과형 센터 (TC)</PresetButton>
+        <PresetButton onClick={() => handlePresetClick('dc')}>광역 배송 센터 (DC)</PresetButton>
+        <PresetButton onClick={() => handlePresetClick('megaFc')}>메가 풀필먼트 (FC)</PresetButton>
+      </PresetContainer>
 
       <ZoneListContainer>
         {zones.map(zone => (
