@@ -2,7 +2,7 @@
 
 # --- Producer Configuration ---
 # 사용할 Producer 타입을 선택합니다. 'kafka', 'eventhubs', 또는 'websocket'
-PRODUCER_TYPE = 'websocket'
+PRODUCER_TYPE = 'kafka'
 
 
 # --- Kafka Configuration ---

@@ -1,7 +1,7 @@
 # sensor_simulator/producers.py
 import json
 from abc import ABC, abstractmethod
-from .websocket_server import WebSocketServer
+from websocket_server import WebSocketServer
 
 # --- Abstract Base Class for DataProducers ---
 
