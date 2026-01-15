@@ -1,2 +1,10 @@
-fastapi
-uvicorn
+# sensor_simulator/requirements.txt
+
+# For Kafka
+kafka-python
+
+# For Azure Event Hubs
+azure-eventhub
+
+# For WebSocket Server
+websockets
