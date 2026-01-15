@@ -4,6 +4,12 @@ import asyncio
 import datetime
 import json
 import time
+import threading
+from typing import Dict
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
 
 # 프로젝트의 설정과 컴포넌트들을 import
 import config
@@ -53,6 +59,76 @@ TOTAL_SENSORS = sum(zone['lines'] for zone in ZONES_CONFIG)
 # 집계 데이터를 전송할 간격 (초)
 AGGREGATION_INTERVAL_SECONDS = 5
 
+# 전역 TRAFFIC_PARAMETERS (실시간 변경 가능)
+TRAFFIC_PARAMS = {
+    'order_quantity': config.TRAFFIC_PARAMETERS['order_quantity'],
+    'inbound_quantity': config.TRAFFIC_PARAMETERS['inbound_quantity'],
+    'return_quantity': config.TRAFFIC_PARAMETERS['return_quantity'],
+    'workload': config.TRAFFIC_PARAMETERS['workload']
+}
+
+# 전역 sensor_generator (스레드 안전하게 접근)
+sensor_generator = None
+
+# FastAPI 앱 생성
+api_app = FastAPI(title="Sensor Simulator Control API")
+
+# CORS 설정
+api_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 파라미터 모델
+class SimulationParams(BaseModel):
+    throughputMultiplier: float = 1.0
+    speedMultiplier: float = 1.0
+    congestionLevel: float = 70.0
+    errorRate: float = 5.0
+
+@api_app.get("/api/simulation/params")
+def get_simulation_params():
+    """현재 시뮬레이션 파라미터 조회"""
+    return {
+        "traffic_parameters": TRAFFIC_PARAMS,
+        "mapped_params": {
+            "throughputMultiplier": TRAFFIC_PARAMS['order_quantity'] / 1000.0,
+            "speedMultiplier": 1.0 if TRAFFIC_PARAMS['workload'] == 70 else (150 - TRAFFIC_PARAMS['workload']) / 80.0,
+            "congestionLevel": TRAFFIC_PARAMS['workload'],
+            "errorRate": 5.0  # 기본값
+        }
+    }
+
+@api_app.post("/api/simulation/params")
+def update_simulation_params(params: SimulationParams):
+    """프론트엔드 파라미터를 센서 시뮬레이터 파라미터로 변환하여 업데이트"""
+    global TRAFFIC_PARAMS, sensor_generator
+    
+    # throughputMultiplier → order_quantity, inbound_quantity
+    base_order = 1000
+    base_inbound = 800
+    TRAFFIC_PARAMS['order_quantity'] = int(base_order * params.throughputMultiplier)
+    TRAFFIC_PARAMS['inbound_quantity'] = int(base_inbound * params.throughputMultiplier)
+    
+    # congestionLevel → workload 직접 매핑
+    TRAFFIC_PARAMS['workload'] = int(params.congestionLevel)
+    
+    # speedMultiplier는 센서 생성기에 직접 반영 (속도 범위에 곱함)
+    if hasattr(sensor_generator, 'speed_multiplier'):
+        sensor_generator.speed_multiplier = params.speedMultiplier
+    
+    # errorRate는 현재 센서 상태에 영향 (추후 확장 가능)
+    
+    print(f"[API] 파라미터 업데이트: workload={TRAFFIC_PARAMS['workload']}, speedMultiplier={params.speedMultiplier}")
+    return {"status": "success", "updated_params": TRAFFIC_PARAMS}
+
+def run_fastapi_server():
+    """별도 스레드에서 FastAPI 서버 실행"""
+    uvicorn.run(api_app, host="0.0.0.0", port=8001, log_level="info")
+
 
 async def main_orchestrator_loop(producer: DataProducer):
     """
@@ -62,8 +138,11 @@ async def main_orchestrator_loop(producer: DataProducer):
     - 주기적으로 Aggregator로부터 집계된 데이터를 받아 Producer를 통해 전송합니다.
     - 각 센서가 대략 1초에 1번씩 데이터를 생성하도록 조절합니다.
     """
-    sensor_generator = SensorGenerator(ZONES_CONFIG, config.TRAFFIC_PARAMETERS)
+    global sensor_generator
+    
+    sensor_generator = SensorGenerator(ZONES_CONFIG, TRAFFIC_PARAMS)
     aggregator = Aggregator(ZONES_CONFIG, AGGREGATION_INTERVAL_SECONDS) # Aggregator 초기화
+    sensor_generator.speed_multiplier = 1.0  # 기본값
     
     # 센서 데이터 생성기(제너레이터)를 가져옵니다.
     signal_iterator = sensor_generator.generate_sensor_data()
@@ -102,6 +181,11 @@ async def main():
     producer = None
     ws_server = None
     try:
+        # FastAPI 서버를 별도 스레드로 시작
+        api_thread = threading.Thread(target=run_fastapi_server, daemon=True)
+        api_thread.start()
+        print("[INFO] Control API started on http://0.0.0.0:8001")
+        
         # WebSocket 서버 설정 및 시작
         ws_server = WebSocketServer(host='localhost', port=8765)
         await ws_server.start()

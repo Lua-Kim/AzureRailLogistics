@@ -34,6 +34,7 @@ const Container = styled.div`
   display: flex;
   overflow: hidden;
   transition: all 0.5s ease;
+  position: relative;
 
   ${props => props.isFullscreen && css`
     position: fixed;
@@ -102,11 +103,14 @@ const ThemeToggleButton = styled.button`
 const MainContent = styled.main`
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 40px;
   background-image: 
     radial-gradient(circle at top right, ${props => props.theme.colors.surfaceHighlight} 0%, transparent 45%),
     radial-gradient(circle at bottom left, ${props => props.theme.colors.surface} 0%, transparent 45%);
   position: relative;
+  height: calc(100vh - 0px);
+  box-sizing: border-box;
 `;
 
 // 헤더: 메인 콘텐츠 상단에 표시되는 제목 및 실시간 상태 표시 영역입니다.
@@ -183,11 +187,10 @@ const LiveIndicator = styled.div`
 
 // --- [Main Component] ---
 const AppContent = ({ themeMode, toggleTheme }) => {
+  // useLocation은 Router 내부에서만 사용 가능하므로 useNavigate의 상태 파악용으로 변경
   const location = useLocation();
   const isDashboard = location.pathname === '/dashboard' || location.pathname === '/';
   const isCompact = !isDashboard;
-  // 전체 화면 모드 활성화 여부를 관리하는 상태
-  const [isPseudoFullscreen, setIsPseudoFullscreen] = useState(false);
 
   const renderThemeIcon = () => {
     switch (themeMode) {
@@ -201,7 +204,7 @@ const AppContent = ({ themeMode, toggleTheme }) => {
   };
 
   return (
-      <Container isFullscreen={isPseudoFullscreen}>
+      <Container isFullscreen={false}>
         {/* 사이드바 영역 */}
         <Sidebar>
           
@@ -270,13 +273,12 @@ const SmartLogisticsDashboard = () => {
   };
 
   return (
-    // 전체 애플리케이션의 렌더링 시작
-    <ThemeProvider theme={activeTheme}>
-    <GlobalStyle />
     <Router>
-      <AppContent themeMode={themeMode} toggleTheme={toggleTheme} />
+      <ThemeProvider theme={activeTheme}>
+        <GlobalStyle />
+        <AppContent themeMode={themeMode} toggleTheme={toggleTheme} />
+      </ThemeProvider>
     </Router>
-    </ThemeProvider>
   );
 };
 

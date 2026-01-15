@@ -74,29 +74,18 @@ class Aggregator:
             
             avg_speed = round(total_speed / speed_count, 2) if speed_count > 0 else 0.0
 
-            # --- Bottleneck Indicator (Simple Example) ---
-            # More sophisticated logic would involve comparing to historical data or thresholds
+            # --- Bottleneck Indicator: Based purely on speed and throughput ---
+            # 병목 현상 = 물류가 거의 정지 상태 (속도 저하)
+            # 센서 상태는 별도의 유지보수 신호 (병목과 무관)
             is_congested = False
             bottleneck_score = 0
             
-            # Condition 1: Low speed with items present
-            if avg_speed > 0 and avg_speed < 1.0: # Items are moving very slowly
+            # 유일한 병목 조건: 거의 정지 상태
+            if avg_speed > 0 and avg_speed < 0.2:
                 is_congested = True
-                bottleneck_score = max(bottleneck_score, 0.7)
+                bottleneck_score = 0.9  # Critical bottleneck
             
-            # Condition 2: High number of warning/error statuses
-            total_status_reports = sum(status_breakdown.values())
-            if total_status_reports > 0:
-                error_ratio = status_breakdown["오류"] / total_status_reports
-                warning_ratio = status_breakdown["경고"] / total_status_reports
-                if error_ratio > 0.1 or warning_ratio > 0.3: # More than 10% errors or 30% warnings
-                    is_congested = True
-                    bottleneck_score = max(bottleneck_score, 0.5 + error_ratio * 0.5 + warning_ratio * 0.2)
-            
-            # Condition 3: Very high throughput (potentially leading to congestion downstream)
-            # This is relative, needs context. For now, a simple threshold.
-            if total_pass_events > (self.aggregation_interval_seconds * 2): # More than 2 items/sec for interval
-                bottleneck_score = max(bottleneck_score, 0.3) # Contributes to congestion
+            # 센서 상태 (오류/경고)는 병목이 아니라 유지보수 신호로만 사용
 
             aggregated_results.append({
                 "aggregated_id": sensor_id,

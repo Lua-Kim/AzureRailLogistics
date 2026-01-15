@@ -8,3 +8,8 @@ azure-eventhub
 
 # For WebSocket Server
 websockets
+
+# For HTTP API Server
+fastapi
+uvicorn
+pydantic

@@ -1,11 +1,13 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, func, text
+from sqlalchemy import desc, func, text, and_
 from datetime import datetime, timedelta
 from typing import List, Optional
 import threading
 import time
+import httpx
+from pydantic import BaseModel
 
 from database import get_db, init_db, engine, Base
 from models import AggregatedSensorData
@@ -124,16 +126,18 @@ def get_zones_summary(
     
     summary = []
     for (zone_id,) in zones:
+        # 최신 데이터만 가져오기 (최신 10분의 데이터만 사용)
         zone_data = db.query(AggregatedSensorData).filter(
             (AggregatedSensorData.zone_id == zone_id) &
             (AggregatedSensorData.created_at >= time_threshold)
-        ).all()
+        ).order_by(AggregatedSensorData.created_at.desc()).limit(50).all()  # 최신 50개만
         
         if not zone_data:
             continue
         
         total_throughput = sum(d.item_throughput for d in zone_data)
-        avg_speed = sum(d.avg_speed for d in zone_data) / len(zone_data) if zone_data else 0
+        # 평균 속도: 최근 데이터에 더 높은 가중치를 주기 위해 역순 평균 계산
+        avg_speed = sum(d.avg_speed for d in zone_data[-20:]) / min(20, len(zone_data)) if zone_data else 0  # 최근 20개
         bottleneck_count = sum(1 for d in zone_data if d.bottleneck_indicator.get('is_congested', False))
         
         summary.append({
@@ -152,12 +156,24 @@ def get_bottlenecks(
     db: Session = Depends(get_db)
 ):
     """
-    병목 현상 감지된 센서 조회
+    병목 현상 감지된 센서 조회 (최신 데이터만)
     """
     time_threshold = datetime.utcnow() - timedelta(hours=hours)
     
-    congested = db.query(AggregatedSensorData).filter(
-        (AggregatedSensorData.created_at >= time_threshold)
+    # 각 센서별 최신 데이터만 가져오기
+    latest_records = db.query(
+        AggregatedSensorData.aggregated_id,
+        func.max(AggregatedSensorData.created_at).label('max_created_at')
+    ).filter(
+        AggregatedSensorData.created_at >= time_threshold
+    ).group_by(AggregatedSensorData.aggregated_id).subquery()
+    
+    congested = db.query(AggregatedSensorData).join(
+        latest_records,
+        and_(
+            AggregatedSensorData.aggregated_id == latest_records.c.aggregated_id,
+            AggregatedSensorData.created_at == latest_records.c.max_created_at
+        )
     ).all()
     
     bottlenecks = [
@@ -196,6 +212,40 @@ def create_sensor_data(
     db.commit()
     db.refresh(sensor_record)
     return sensor_record
+
+# ===== 시뮬레이션 제어 API =====
+
+class SimulationParams(BaseModel):
+    throughputMultiplier: float = 1.0
+    speedMultiplier: float = 1.0
+    congestionLevel: float = 70.0
+    errorRate: float = 5.0
+
+SENSOR_SIMULATOR_URL = "http://localhost:8001"
+
+@app.get("/api/simulation/params")
+async def get_simulation_params():
+    """센서 시뮬레이터의 현재 파라미터 조회"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{SENSOR_SIMULATOR_URL}/api/simulation/params", timeout=5.0)
+            return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"센서 시뮬레이터 연결 실패: {str(e)}")
+
+@app.post("/api/simulation/params")
+async def update_simulation_params(params: SimulationParams):
+    """센서 시뮬레이터의 파라미터 업데이트"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{SENSOR_SIMULATOR_URL}/api/simulation/params",
+                json=params.model_dump(),
+                timeout=5.0
+            )
+            return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"센서 시뮬레이터 연결 실패: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

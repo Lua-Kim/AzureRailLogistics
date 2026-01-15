@@ -3,8 +3,9 @@ import styled, { keyframes, css } from 'styled-components';
 import { useNavigate } from 'react-router-dom';
 import { 
   ShoppingCart, RotateCcw, Truck, TrendingDown, Thermometer, Wind, Users, Cpu, ChevronRight,
-  BarChart3, Zap, Circle, BrainCircuit, Loader2
+  BarChart3, Zap, Circle, BrainCircuit, Loader2, AlertTriangle, Activity
 } from 'lucide-react';
+import { apiService } from './api';
 
 // --- [Animations] ---
 const fadeIn = keyframes`
@@ -85,136 +86,508 @@ const LoadBar = styled.div`
   }
 `;
 
+// 오른쪽 사이드바 스타일
+const RightSidebar = styled.div`
+  width: 320px;
+  height: 100vh;
+  background: ${props => props.theme.colors.surface};
+  border-left: 1px solid ${props => props.theme.colors.border};
+  padding: 24px;
+  overflow-y: auto;
+  flex-shrink: 0;
+  animation: ${fadeIn} 0.3s ease-out;
+  box-sizing: border-box;
 
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: ${props => props.theme.colors.border};
+    border-radius: 3px;
+  }
+`;
+
+const SidebarTitle = styled.h3`
+  font-size: 16px;
+  font-weight: 900;
+  color: ${props => props.theme.colors.text.main};
+  margin: 0 0 24px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`;
+
+const ControlGroup = styled.div`
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid ${props => props.theme.colors.border};
+
+  &:last-child {
+    border-bottom: none;
+  }
+`;
+
+const ControlLabel = styled.label`
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  color: ${props => props.theme.colors.text.muted};
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+`;
+
+const SliderInput = styled.input`
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: ${props => props.theme.colors.border};
+  outline: none;
+  -webkit-appearance: none;
+
+  &::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: ${props => props.theme.colors.primary};
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+    transition: all 0.2s;
+
+    &:hover {
+      transform: scale(1.2);
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.6);
+    }
+  }
+
+  &::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: ${props => props.theme.colors.primary};
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+    transition: all 0.2s;
+
+    &:hover {
+      transform: scale(1.2);
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.6);
+    }
+  }
+`;
+
+const ValueDisplay = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 11px;
+`;
+
+const ValueNumber = styled.span`
+  font-weight: 900;
+  color: ${props => props.theme.colors.primary};
+  font-size: 14px;
+`;
+
+const ResetButton = styled.button`
+  width: 100%;
+  padding: 12px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid ${props => props.theme.colors.primary};
+  color: ${props => props.theme.colors.primary};
+  border-radius: 12px;
+  font-weight: 800;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.3s;
+
+  &:hover {
+    background: ${props => props.theme.colors.primary};
+    color: white;
+  }
+`;
+
+
+
+// 페이지 컨테이너
+const PageContainer = styled.div`
+  display: flex;
+  flex-direction: row;
+  gap: 0;
+  height: 100%;
+  animation: ${fadeIn} 0.5s ease forwards;
+`;
+
+// 메인 컨텐츠 래퍼
+const MainContentWrapper = styled.div`
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  overflow-y: auto;
+  padding-right: 24px;
+`;
 
 const MacroDashboardPage = () => {
   const navigate = useNavigate();
-    // 선택된 구역의 ID를 관리하는 상태
-  const [selectedZoneId, setSelectedZoneId] = useState('PK-01');
-  // AI 인사이트 텍스트를 관리하는 상태
+  const [selectedZoneId, setSelectedZoneId] = useState(null);
   const [aiInsight, setAiInsight] = useState("");
-  // AI 인사이트 생성 중인지 여부를 나타내는 상태
   const [isGenerating, setIsGenerating] = useState(false);
-
-
-    // 대시보드 구성을 위한 데이터 (구역, 연결 등)
-  const [config, setConfig] = useState({
-    centerName: "Incheon Global Hub-01",
-    width: 1200, height: 800,
-    zones: [
-      { id: 'IN-01', name: 'Inbound Dock', x: 150, y: 400, type: 'entry', lines: 2, length: 15, workers: 4, status: 'normal', load: 45, temp: 32, vib: 1.2 },
-      { id: 'SR-01', name: 'Sorter Alpha', x: 450, y: 400, type: 'process', lines: 4, length: 30, workers: 2, status: 'warning', load: 72, temp: 48, vib: 3.8 },
-      { id: 'BF-01', name: 'Storage Buffer', x: 450, y: 150, type: 'buffer', lines: 1, length: 50, workers: 1, status: 'normal', load: 20, temp: 28, vib: 0.5 },
-      { id: 'PK-01', name: 'Picking Zone', x: 800, y: 400, type: 'process', lines: 3, length: 20, workers: 8, status: 'critical', load: 92, temp: 55, vib: 5.2 },
-      { id: 'OT-01', name: 'Outbound', x: 1050, y: 400, type: 'exit', lines: 2, length: 15, workers: 3, status: 'normal', load: 55, temp: 35, vib: 1.5 },
-    ],
-    connections: [
-      { from: 'IN-01', to: 'SR-01' }, { from: 'SR-01', to: 'BF-01' },
-      { from: 'SR-01', to: 'PK-01' }, { from: 'PK-01', to: 'OT-01' },
-    ]
+  
+  // 시뮬레이션 파라미터
+  const [simParams, setSimParams] = useState({
+    throughputMultiplier: 1.0,  // 0.5 ~ 2.0
+    speedMultiplier: 1.0,       // 0.5 ~ 2.0
+    congestionLevel: 70,        // 0 ~ 100
+    errorRate: 5                // 0 ~ 50
   });
+  
+  // 실제 데이터
+  const [zonesSummary, setZonesSummary] = useState([]);
+  const [bottlenecks, setBottlenecks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-
-  // 핵심 성과 지표(KPI) 데이터를 관리하는 상태
+  // KPI 데이터
   const [kpiMetrics, setKpiMetrics] = useState({
-    orders: 12450,
-    returns: 840,
-    unloading: 5200,
-    loss: 7.53,
-    bottleneckCount: 28,
-    bottleneckWaitTime: 4.2,
-    bottleneckLoss: 1.2
+    totalThroughput: 0,
+    avgSpeed: 0,
+    bottleneckCount: 0,
+    normalSensors: 0,
+    totalSensors: 0
   });
 
-  // 현재 선택된 구역의 데이터를 찾습니다.
-  const selectedZone = config.zones.find(z => z.id === selectedZoneId) || config.zones[0];
+  // 파라미터 변경 핸들러
+  const handleParamChange = async (key, value) => {
+    const newParams = {
+      ...simParams,
+      [key]: parseFloat(value)
+    };
+    setSimParams(newParams);
+    
+    // 센서 시뮬레이터에 실시간 반영
+    try {
+      await apiService.updateSimulationParams(newParams);
+      console.log('시뮬레이션 파라미터 업데이트 성공:', newParams);
+    } catch (err) {
+      console.error('시뮬레이션 파라미터 업데이트 실패:', err);
+    }
+  };
 
-  // 데이터 자동 업데이트 로직 (3초마다 실행)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setConfig(prev => {
-        const nextZones = prev.zones.map(z => {
-          const drift = (Math.random() - 0.5) * 6; // 데이터에 약간의 무작위 변동 추가
-          const nextLoad = Math.max(10, Math.min(100, z.load + drift)); // 부하량 업데이트
-          return {
-            ...z, load: nextLoad, temp: 30 + (nextLoad / 2.5), vib: (nextLoad / 20) + Math.random(),
-            status: nextLoad > 88 ? 'critical' : nextLoad > 70 ? 'warning' : 'normal' // 상태 업데이트
-          };
-        });
-        return { ...prev, zones: nextZones };
+  // 파라미터 초기화
+  const resetParams = async () => {
+    const defaultParams = {
+      throughputMultiplier: 1.0,
+      speedMultiplier: 1.0,
+      congestionLevel: 70,
+      errorRate: 5
+    };
+    setSimParams(defaultParams);
+    
+    try {
+      await apiService.updateSimulationParams(defaultParams);
+      console.log('시뮬레이션 파라미터 초기화 완료');
+    } catch (err) {
+      console.error('시뮬레이션 파라미터 초기화 실패:', err);
+    }
+  };
+
+  // 실시간 데이터 가져오기
+  const fetchData = async () => {
+    try {
+      const [summaryData, bottleneckData] = await Promise.all([
+        apiService.getZonesSummary(1),
+        apiService.getBottlenecks(1)
+      ]);
+      
+      setError(null);
+      
+      // 이전 데이터와 비교해서 실제로 변경된 경우만 업데이트
+      setZonesSummary(prev => {
+        if (JSON.stringify(prev) !== JSON.stringify(summaryData)) {
+          return summaryData;
+        }
+        return prev;
       });
-    }, 3000);
+      
+      setBottlenecks(prev => {
+        if (JSON.stringify(prev) !== JSON.stringify(bottleneckData)) {
+          return bottleneckData;
+        }
+        return prev;
+      });
+      
+      // KPI 계산
+      const totalThroughput = summaryData.reduce((sum, zone) => sum + zone.total_throughput, 0);
+      const avgSpeed = summaryData.length > 0 
+        ? summaryData.reduce((sum, zone) => sum + zone.avg_speed, 0) / summaryData.length 
+        : 0;
+      
+      const newMetrics = {
+        totalThroughput,
+        avgSpeed: avgSpeed.toFixed(2),
+        bottleneckCount: bottleneckData.length,
+        normalSensors: summaryData.reduce((sum, zone) => sum + zone.data_points, 0),
+        totalSensors: summaryData.length
+      };
+      
+      setKpiMetrics(prev => {
+        if (JSON.stringify(prev) !== JSON.stringify(newMetrics)) {
+          return newMetrics;
+        }
+        return prev;
+      });
+      
+    } catch (err) {
+      console.error('데이터 가져오기 실패:', err);
+      setError('데이터를 불러올 수 없습니다. 백엔드 서버 상태를 확인하세요.');
+    }
+  };
 
-    // 컴포넌트 언마운트 시 인터벌 정리
+  // 초기 로드 및 5초마다 자동 새로고침
+  useEffect(() => {
+    // 처음 로드할 때만 loading true
+    const loadInitial = async () => {
+      setLoading(true);
+      await fetchData();
+      setLoading(false);
+    };
+    
+    loadInitial();
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
 
   // AI 인사이트를 생성하는 함수
   const generateAIInsight = () => {
-    setIsGenerating(true); // AI 생성 중 상태로 설정
+    setIsGenerating(true);
     setTimeout(() => {
-      // 1.5초 후 인사이트 메시지 설정 (임시 로직)
-      setAiInsight(`${selectedZone.name}의 가동률이 ${selectedZone.load.toFixed(1)}%로 높습니다. 우회 경로 확보를 권고합니다.`);
-      setIsGenerating(false); // AI 생성 완료 상태로 설정
+      const topBottleneck = bottlenecks[0];
+      if (topBottleneck) {
+        setAiInsight(`${topBottleneck.zone_id} 구역에서 병목 스코어 ${topBottleneck.bottleneck_score}로 감지됨. 우회 경로 확보를 권고합니다.`);
+      } else {
+        setAiInsight("모든 구역이 정상 운영 중입니다.");
+      }
+      setIsGenerating(false);
     }, 1500);
   };
 
+  if (loading) {
     return (
-        <>
-            {/* KPI 지표 그리드 */}
-            <KpiGrid>
-              {[
-                { label: 'Today Orders', value: kpiMetrics.orders.toLocaleString(), color: '#60a5fa', icon: <ShoppingCart size={16}/> },
-                { label: 'Returns', value: kpiMetrics.returns.toLocaleString(), color: '#fbbf24', icon: <RotateCcw size={16}/> },
-                { label: 'Unloading', value: kpiMetrics.unloading.toLocaleString(), color: '#10b981', icon: <Truck size={16}/> },
-                { label: 'Loss Estimate', value: `₩${kpiMetrics.loss}M`, color: '#ef4444', icon: <TrendingDown size={16}/> },
-                { label: '병목 발생', value: `${kpiMetrics.bottleneckCount}건`, color: '#f97316', icon: <Zap size={16}/> },
-                { label: '병목 대기시간', value: `${kpiMetrics.bottleneckWaitTime}H`, color: '#f59e0b', icon: <Loader2 size={16}/> },
-                { label: '병목 손실액', value: `₩${kpiMetrics.bottleneckLoss}M`, color: '#ef4444', icon: <TrendingDown size={16}/> },
-              ].map((kpi, i) => (
-                <KpiCard key={i}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '10px', fontWeight: 900, color: 'inherit' }}>{kpi.label}</span>
-                    <div style={{ padding: '6px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.1)', color: kpi.color }}>{kpi.icon}</div>
-                  </div>
-                  <p style={{ fontSize: '24px', fontWeight: 900, fontFamily: 'monospace', margin: 0, color: kpi.label === '병목 손실액' ? kpi.color : 'inherit' }}>{kpi.value}</p>
-                </KpiCard>
-              ))}
-            </KpiGrid>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}>
+        <Loader2 size={40} style={{ animation: 'spin 1s linear infinite' }} />
+      </div>
+    );
+  }
 
-            {/* AI 배너 및 인사이트 */}
-            <AiBanner>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                <div style={{ backgroundColor: '#2563eb', padding: '10px', borderRadius: '16px' }}><BrainCircuit color="white" size={24} /></div>
+  if (error) {
+    return (
+      <div style={{ textAlign: 'center', padding: '40px' }}>
+        <AlertTriangle size={40} color="#ef4444" />
+        <p style={{ marginTop: '16px', color: '#ef4444' }}>{error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <PageContainer>
+      {/* 메인 콘텐츠 영역 */}
+      <MainContentWrapper>
+        {/* KPI 지표 그리드 */}
+        <KpiGrid>
+        {[
+          { label: '총 처리량 (1H)', value: kpiMetrics.totalThroughput.toLocaleString(), color: '#60a5fa', icon: <ShoppingCart size={16}/> },
+          { label: '평균 속도', value: `${kpiMetrics.avgSpeed} m/s`, color: '#10b981', icon: <Activity size={16}/> },
+          { label: '활성 병목', value: `${kpiMetrics.bottleneckCount}건`, color: '#f97316', icon: <Zap size={16}/> },
+          { label: '정상 센서', value: `${kpiMetrics.normalSensors}/${kpiMetrics.totalSensors}`, color: '#10b981', icon: <Cpu size={16}/> },
+        ].map((kpi, i) => (
+          <KpiCard key={i}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span style={{ fontSize: '10px', fontWeight: 900, color: 'inherit' }}>{kpi.label}</span>
+              <div style={{ padding: '6px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.1)', color: kpi.color }}>{kpi.icon}</div>
+            </div>
+            <p style={{ fontSize: '24px', fontWeight: 900, fontFamily: 'monospace', margin: 0 }}>{kpi.value}</p>
+          </KpiCard>
+        ))}
+      </KpiGrid>
+
+      {/* AI 배너 및 인사이트 */}
+      <AiBanner>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div style={{ backgroundColor: '#2563eb', padding: '10px', borderRadius: '16px' }}><BrainCircuit color="white" size={24} /></div>
+          <div>
+            <h4 style={{ fontSize: '9px', fontWeight: 900, color: '#60a5fa', margin: 0 }}>AI OPERATIONS ADVISOR</h4>
+            <p style={{ fontSize: '13px', color: 'inherit', fontWeight: 'bold', margin: '4px 0 0' }}>{aiInsight || "운영 전략 실시간 분석 대기 중..."}</p>
+          </div>
+        </div>
+        <AiButton onClick={generateAIInsight} disabled={isGenerating}>
+          {isGenerating ? <Loader2 size={14}/> : 'ANALYZE'}
+        </AiButton>
+      </AiBanner>
+
+      {/* Zone 상태 테이블 */}
+      <StatusTable>
+        {zonesSummary.map(zone => {
+          const status = zone.bottleneck_count > 3 ? 'critical' : zone.avg_speed < 1.5 ? 'warning' : 'normal';
+          const loadPercent = Math.min(100, (zone.total_throughput / 100) * 100);
+          
+          return (
+            <ZoneRow 
+              key={zone.zone_id} 
+              onClick={() => navigate('/zone_analytics', { state: { zoneId: zone.zone_id, zoneName: zone.zone_id } })}
+            >
+              <span style={{ color: 'inherit', fontWeight: 900 }}>{zone.zone_id}</span>
+              <span style={{ fontWeight: 800 }}>처리량: {zone.total_throughput}</span>
+              <div>
+                <div style={{ fontSize: '12px', marginBottom: '4px' }}>평균 {zone.avg_speed} m/s</div>
+                <LoadBar val={loadPercent} />
+              </div>
+              <span style={{ fontWeight: 900 }}>데이터: {zone.data_points}건</span>
+              <span style={{ 
+                color: status === 'critical' ? '#ef4444' : status === 'warning' ? '#f59e0b' : '#10b981', 
+                fontSize: '10px', 
+                fontWeight: 900 
+              }}>
+                {status.toUpperCase()}
+              </span>
+              <ChevronRight size={18} color="#475569" />
+            </ZoneRow>
+          );
+        })}
+      </StatusTable>
+
+      {/* 병목 현황 */}
+      {bottlenecks.length > 0 && (
+        <div style={{ marginTop: '32px' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: 900, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <AlertTriangle size={20} color="#ef4444" />
+            활성 병목 현황
+          </h3>
+          <div style={{ display: 'grid', gap: '12px' }}>
+            {bottlenecks.slice(0, 5).map((bottleneck, idx) => (
+              <div 
+                key={idx}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  padding: '16px',
+                  borderRadius: '12px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}
+              >
                 <div>
-                  <h4 style={{ fontSize: '9px', fontWeight: 900, color: '#60a5fa', margin: 0 }}>AI OPERATIONS ADVISOR</h4>
-                  <p style={{ fontSize: '13px', color: 'inherit', fontWeight: 'bold', margin: '4px 0 0' }}>{aiInsight || "운영 전략 실시간 분석 대기 중..."}</p>
+                  <span style={{ fontWeight: 900, fontSize: '14px' }}>{bottleneck.aggregated_id}</span>
+                  <span style={{ marginLeft: '12px', color: '#666', fontSize: '12px' }}>
+                    Zone: {bottleneck.zone_id}
+                  </span>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '20px', fontWeight: 900, color: '#ef4444' }}>
+                    {(bottleneck.bottleneck_score * 100).toFixed(0)}%
+                  </div>
+                  <div style={{ fontSize: '10px', color: '#666' }}>병목 스코어</div>
                 </div>
               </div>
-              <AiButton onClick={generateAIInsight} disabled={isGenerating}>
-                {isGenerating ? <Loader2 size={14}/> : 'ANALYZE'}
-              </AiButton>
-            </AiBanner>
-
-            <StatusTable>
-            {config.zones.map(zone => (
-              <ZoneRow key={zone.id} onClick={() => { setSelectedZoneId(zone.id); navigate('/zone_analytics', { state: { zoneId: zone.id, zoneName: zone.name } }); }}>
-                <span style={{ color: 'inherit', fontWeight: 900 }}>{zone.id}</span>
-                <span style={{ fontWeight: 800 }}>{zone.name}</span>
-                <div>
-                  <div style={{ fontSize: '12px', marginBottom: '4px' }}>{zone.load.toFixed(1)}%</div>
-                  <LoadBar val={zone.load} />
-                </div>
-                <span style={{ fontWeight: 900, color: zone.temp > 60 ? 'red' : 'inherit' }}>{zone.temp.toFixed(1)}°C</span>
-                <span style={{ color: zone.status === 'warning' ? '#f59e0b' : '#10b981', fontSize: '10px' }}>{zone.status.toUpperCase()}</span>
-                <ChevronRight size={18} color="#475569" />
-              </ZoneRow>
             ))}
-          </StatusTable>
+          </div>
+        </div>
+      )}
+      </MainContentWrapper>
 
+      {/* 오른쪽 사이드바 - 시뮬레이션 파라미터 제어 */}
+      <RightSidebar>
+        <SidebarTitle>
+          <Zap size={18} />
+          시뮬레이션 제어
+        </SidebarTitle>
 
-        </>
-    );
+        <ControlGroup>
+          <ControlLabel>처리량 증감율</ControlLabel>
+          <SliderInput
+            type="range"
+            min="0.5"
+            max="2"
+            step="0.1"
+            value={simParams.throughputMultiplier}
+            onChange={(e) => handleParamChange('throughputMultiplier', e.target.value)}
+          />
+          <ValueDisplay>
+            <span>낮음</span>
+            <ValueNumber>{(simParams.throughputMultiplier * 100).toFixed(0)}%</ValueNumber>
+            <span>높음</span>
+          </ValueDisplay>
+        </ControlGroup>
+
+        <ControlGroup>
+          <ControlLabel>속도 증감율</ControlLabel>
+          <SliderInput
+            type="range"
+            min="0.5"
+            max="2"
+            step="0.1"
+            value={simParams.speedMultiplier}
+            onChange={(e) => handleParamChange('speedMultiplier', e.target.value)}
+          />
+          <ValueDisplay>
+            <span>느림</span>
+            <ValueNumber>{(simParams.speedMultiplier * 100).toFixed(0)}%</ValueNumber>
+            <span>빠름</span>
+          </ValueDisplay>
+        </ControlGroup>
+
+        <ControlGroup>
+          <ControlLabel>혼잡도 레벨</ControlLabel>
+          <SliderInput
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            value={simParams.congestionLevel}
+            onChange={(e) => handleParamChange('congestionLevel', e.target.value)}
+          />
+          <ValueDisplay>
+            <span>여유</span>
+            <ValueNumber>{simParams.congestionLevel}%</ValueNumber>
+            <span>포화</span>
+          </ValueDisplay>
+        </ControlGroup>
+
+        <ControlGroup>
+          <ControlLabel>에러율</ControlLabel>
+          <SliderInput
+            type="range"
+            min="0"
+            max="50"
+            step="2"
+            value={simParams.errorRate}
+            onChange={(e) => handleParamChange('errorRate', e.target.value)}
+          />
+          <ValueDisplay>
+            <span>정상</span>
+            <ValueNumber>{simParams.errorRate}%</ValueNumber>
+            <span>이상</span>
+          </ValueDisplay>
+        </ControlGroup>
+
+        <ResetButton onClick={resetParams}>
+          초기값으로 복원
+        </ResetButton>
+
+        <div style={{ marginTop: '32px', padding: '16px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '12px', fontSize: '11px', color: '#9ca3af', lineHeight: '1.6' }}>
+          💡 <strong>팁:</strong> 슬라이더를 조정하여 시뮬레이션 파라미터를 실시간으로 변경할 수 있습니다. 각 요인이 시스템에 미치는 영향을 관찰하세요.
+        </div>
+      </RightSidebar>
+    </PageContainer>
+  );
 };
 
 export default MacroDashboardPage;

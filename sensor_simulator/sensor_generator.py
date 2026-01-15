@@ -53,10 +53,19 @@ class SensorGenerator:
     def _calculate_speed_range(self):
         """교통 매개변수에 따라 센서 통과 속도 범위를 계산합니다."""
         workload = self.traffic_parameters['workload']
+        
+        # speedMultiplier는 frontend 슬라이더에서 0.5~2.0 범위
+        # 기본값은 1.0 (normal speed)
+        speed_multiplier = getattr(self, 'speed_multiplier', 1.0)
 
-        # 작업 부하가 높을수록 속도 범위가 줄어들고 최저 속도는 높아짐 (정체 시뮬레이션)
-        min_speed = max(0.5, 0.5 + (workload / 100.0) * 1.5) # 워크로드 100% 시 최소 2.0 m/s
-        max_speed = max(min_speed + 0.5, 5.0 - (workload / 100.0) * 2.0) # 워크로드 100% 시 최대 3.0 m/s
+        # 기본 범위: 3.0 ~ 5.5 m/s (정상)
+        # workload 100% 시: 1.5 ~ 3.0 m/s (정체)
+        base_min_speed = 3.0 - (workload / 100.0) * 1.5  # workload 100% 시 1.5 m/s
+        base_max_speed = 5.5 - (workload / 100.0) * 2.5  # workload 100% 시 3.0 m/s
+        
+        # speedMultiplier 적용 (슬라이더에서 조정)
+        min_speed = max(0.1, base_min_speed * speed_multiplier)
+        max_speed = max(min_speed + 0.5, base_max_speed * speed_multiplier)
 
         return min_speed, max_speed
 
@@ -85,11 +94,33 @@ class SensorGenerator:
                     # 2. speed_at_sensor 시뮬레이션
                     speed_at_sensor = round(random.uniform(min_speed, max_speed), 2)
 
-                    # 3. sensor_status 시뮬레이션 (대부분 정상)
-                    status_choices = ["정상", "정상", "정상", "정상", "경고", "오류"]
-                    # 작업 부하가 높을수록 경고/오류 확률 증가
-                    status_weights = [80, 5, 2, 1, 10 + self.traffic_parameters['workload'] / 10, 3 + self.traffic_parameters['workload'] / 20]
-                    sensor_status = random.choices(status_choices, weights=status_weights, k=1)[0]
+                    # 3. sensor_status 시뮬레이션 (센서 자체의 운영 상태)
+                    # 조건 기반: 속도가 매우 낮거나 작업 부하가 매우 높으면 센서 오류 발생 가능
+                    # 정상: 대부분의 센서가 정상 (85-95%)
+                    # 경고: 센서 성능 저하, 청소 필요 (3-8%)
+                    # 오류: 센서 고장, 보정 오류 등 (1-3%)
+                    
+                    # 낮은 속도나 높은 workload에서 오류/경고 가능성 증가
+                    base_error_prob = 0.01  # 기본 오류율 1%
+                    base_warning_prob = 0.03  # 기본 경고율 3%
+                    
+                    # 속도가 낮으면 센서 오류 가능성 증가
+                    if speed_at_sensor < 1.0:
+                        base_error_prob += 0.02  # 저속 시 +2%
+                        base_warning_prob += 0.03  # 저속 시 +3%
+                    
+                    # workload가 높으면 센서 스트레스 증가
+                    base_error_prob += self.traffic_parameters['workload'] / 1000  # workload 100% 시 +0.1%
+                    base_warning_prob += self.traffic_parameters['workload'] / 500  # workload 100% 시 +0.2%
+                    
+                    # 상태 결정
+                    rand = random.random()
+                    if rand < base_error_prob:
+                        sensor_status = "오류"
+                    elif rand < base_error_prob + base_warning_prob:
+                        sensor_status = "경고"
+                    else:
+                        sensor_status = "정상"
 
                     yield {
                         "sensor_id": sensor_id,
