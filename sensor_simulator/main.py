@@ -10,8 +10,7 @@ import config
 from producers import get_producer, DataProducer
 from websocket_server import WebSocketServer
 from sensor_generator import SensorGenerator
-# Aggregator는 추후 사용을 위해 남겨둡니다。
-# from aggregator import Aggregator
+from aggregator import Aggregator # Aggregator 임포트
 
 # "메가 풀필먼트 센터" 기준 Zone 설정
 ZONES_CONFIG = [
@@ -51,29 +50,47 @@ ZONES_CONFIG = [
 
 # 총 센서 수 계산
 TOTAL_SENSORS = sum(zone['lines'] for zone in ZONES_CONFIG)
+# 집계 데이터를 전송할 간격 (초)
+AGGREGATION_INTERVAL_SECONDS = 5
 
 
 async def main_orchestrator_loop(producer: DataProducer):
     """
     메인 오케스트레이터 루프:
     - 센서 이벤트를 계속 생성합니다.
-    - pass_event가 1인 경우에만 Producer를 통해 전송합니다.
+    - pass_event가 1인 경우 Aggregator에 이벤트를 전달합니다.
+    - 주기적으로 Aggregator로부터 집계된 데이터를 받아 Producer를 통해 전송합니다.
     - 각 센서가 대략 1초에 1번씩 데이터를 생성하도록 조절합니다.
     """
     sensor_generator = SensorGenerator(ZONES_CONFIG, config.TRAFFIC_PARAMETERS)
+    aggregator = Aggregator(ZONES_CONFIG, AGGREGATION_INTERVAL_SECONDS) # Aggregator 초기화
     
     # 센서 데이터 생성기(제너레이터)를 가져옵니다.
     signal_iterator = sensor_generator.generate_sensor_data()
+    
+    last_aggregation_time = time.time() # 집계 타이밍을 위한 변수
     
     print(f"--- Starting Main Orchestrator Loop (Total sensors: {TOTAL_SENSORS}) ---")
     while True:
         # 1. 원시 센서 이벤트 생성
         sensor_event = next(signal_iterator)
         
-        # 2. pass_event가 1인 경우에만 센서 이벤트를 전송합니다.
+        # 2. pass_event가 1인 경우에만 센서 이벤트를 Aggregator에 전달합니다.
         if sensor_event['pass_event'] == 1:
-            producer.send_data([sensor_event]) # producer expects a list of data
-            # print(f"Sent pass event from {sensor_event['sensor_id']}") # Debugging line
+            aggregator.process_sensor_event(sensor_event)
+            
+        # 3. 주기적으로 집계된 데이터를 Producer를 통해 전송합니다.
+        current_time = time.time()
+        if current_time - last_aggregation_time >= AGGREGATION_INTERVAL_SECONDS:
+            print(f"--- ({datetime.datetime.now()}) Aggregating and sending data ---")
+            aggregated_data = aggregator.get_aggregated_data_and_clear_buffer()
+            if aggregated_data:
+                producer.send_data(aggregated_data)
+                # print(f"Sent {len(aggregated_data)} aggregated sensor reports.") # Debugging line
+                # print("Sample aggregated data:", json.dumps(aggregated_data[0], indent=2))
+            else:
+                print("No aggregated data to send in this interval.")
+            last_aggregation_time = current_time
             
         # 각 센서가 대략 1초에 1번씩 데이터를 생성하도록 조절합니다.
         # 즉, 모든 센서가 한 바퀴 데이터를 생성하는 데 약 1초가 걸리도록 합니다.

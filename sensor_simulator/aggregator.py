@@ -1,75 +1,118 @@
 # sensor_simulator/aggregator.py
 import datetime
-from collections import defaultdict
+import time
 
 class Aggregator:
     """
-    원시 센서 신호를 수집하여 의미 있는 Zone 단위의 데이터로 집계하는 클래스.
+    개별 센서 이벤트를 수집하여 특정 시간 간격으로 집계된 데이터를 생성합니다.
+    트래픽, 병목 현상 감지 및 통합 정보 제공에 중점을 둡니다.
     """
+    def __init__(self, zones_config, aggregation_interval_seconds=5):
+        self.zones_config = zones_config
+        self.aggregation_interval_seconds = aggregation_interval_seconds
+        self.sensor_buffers = {} # Stores raw events per sensor_id
+        self.last_aggregated_time = time.time()
 
-    def __init__(self, zones_config):
-        """
-        Aggregator를 초기화합니다.
+        # Initialize buffers for each potential sensor
+        for zone in self.zones_config:
+            for i in range(1, zone['lines'] + 1):
+                sensor_id = f"{zone['id']}-S{i}"
+                self.sensor_buffers[sensor_id] = []
+        
+        print(f"Aggregator initialized for {len(self.sensor_buffers)} sensors with {aggregation_interval_seconds}s interval.")
 
-        :param zones_config: Zone 설정 정보가 담긴 리스트
-        """
-        self.zones_config = {zone['id']: zone for zone in zones_config}
-        self.zone_data_buffer = defaultdict(lambda: defaultdict(list))
-        print("Aggregator: Initialized.")
+    def process_sensor_event(self, event):
+        """단일 센서 이벤트를 버퍼에 추가합니다."""
+        sensor_id = event['sensor_id']
+        if sensor_id in self.sensor_buffers:
+            self.sensor_buffers[sensor_id].append(event)
+        # else: log an error or ignore unknown sensor
 
-    def process_signal(self, signal: dict):
+    def get_aggregated_data_and_clear_buffer(self):
         """
-        하나의 원시 센서 신호를 처리하여 내부 버퍼에 저장합니다.
+        현재 버퍼에 있는 이벤트를 집계하고, 집계된 데이터를 반환한 후 버퍼를 비웁니다.
+        """
+        aggregated_results = []
+        current_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-        :param signal: 센서 생성기에서 온 단일 신호 데이터
-        """
-        try:
-            # sensor_id에서 zone_id 추출 (예: 'sensor-IN-A01-1-load' -> 'IN-A01')
-            parts = signal['sensor_id'].split('-')
-            zone_id = f"{parts[1]}-{parts[2]}"
+        for sensor_id, events in self.sensor_buffers.items():
+            # Find corresponding zone info
+            zone_id = sensor_id.split('-S')[0]
+            zone_info = next((z for z in self.zones_config if z['id'] == zone_id), None)
+            line_direction = zone_info['direction'] if zone_info else "UNKNOWN"
+
+            if not events:
+                # No events for this sensor in this interval, report default/zero values
+                aggregated_results.append({
+                    "aggregated_id": sensor_id,
+                    "zone_id": zone_id,
+                    "line_direction": line_direction,
+                    "timestamp": current_time,
+                    "aggregation_interval_sec": self.aggregation_interval_seconds,
+                    "item_throughput": 0,
+                    "avg_speed": 0.0,
+                    "sensor_status_breakdown": {"정상": 0, "경고": 0, "오류": 0, "오프라인": 0},
+                    "bottleneck_indicator": {
+                        "is_congested": False,
+                        "bottleneck_score": 0
+                    }
+                })
+                continue
+
+            # --- Aggregation Logic ---
+            total_pass_events = 0
+            total_speed = 0
+            speed_count = 0
+            status_breakdown = {"정상": 0, "경고": 0, "오류": 0, "오프라인": 0} # Initialize all statuses
+
+            for event in events:
+                if event['pass_event'] == 1:
+                    total_pass_events += 1
+                    total_speed += event['speed_at_sensor']
+                    speed_count += 1
+                status_breakdown[event['sensor_status']] = status_breakdown.get(event['sensor_status'], 0) + 1
             
-            if zone_id in self.zones_config:
-                signal_type = signal['type'] # 'load', 'vibration'
-                value = signal['value']
-                self.zone_data_buffer[zone_id][signal_type].append(value)
-        except (IndexError, KeyError) as e:
-            print(f"Aggregator: Could not process invalid signal: {signal}. Error: {e}")
+            avg_speed = round(total_speed / speed_count, 2) if speed_count > 0 else 0.0
 
-    def get_aggregated_data_and_clear_buffer(self) -> list:
-        """
-        버퍼에 저장된 데이터를 바탕으로 Zone별 집계 데이터를 생성하고 버퍼를 비웁니다.
-
-        :return: 프론트엔드로 보낼 Zone 데이터 리스트
-        """
-        aggregated_zones = []
-        
-        for zone_id, zone_info in self.zones_config.items():
-            buffer = self.zone_data_buffer[zone_id]
+            # --- Bottleneck Indicator (Simple Example) ---
+            # More sophisticated logic would involve comparing to historical data or thresholds
+            is_congested = False
+            bottleneck_score = 0
             
-            # 버퍼에 데이터가 있는 경우 평균 계산, 없으면 0으로 처리
-            avg_load = sum(buffer['load']) / len(buffer['load']) if buffer['load'] else 0
-            avg_vib = sum(buffer['vibration']) / len(buffer['vibration']) if buffer['vibration'] else 0
+            # Condition 1: Low speed with items present
+            if avg_speed > 0 and avg_speed < 1.0: # Items are moving very slowly
+                is_congested = True
+                bottleneck_score = max(bottleneck_score, 0.7)
+            
+            # Condition 2: High number of warning/error statuses
+            total_status_reports = sum(status_breakdown.values())
+            if total_status_reports > 0:
+                error_ratio = status_breakdown["오류"] / total_status_reports
+                warning_ratio = status_breakdown["경고"] / total_status_reports
+                if error_ratio > 0.1 or warning_ratio > 0.3: # More than 10% errors or 30% warnings
+                    is_congested = True
+                    bottleneck_score = max(bottleneck_score, 0.5 + error_ratio * 0.5 + warning_ratio * 0.2)
+            
+            # Condition 3: Very high throughput (potentially leading to congestion downstream)
+            # This is relative, needs context. For now, a simple threshold.
+            if total_pass_events > (self.aggregation_interval_seconds * 2): # More than 2 items/sec for interval
+                bottleneck_score = max(bottleneck_score, 0.3) # Contributes to congestion
 
-            # 상태 결정
-            if avg_load > 88:
-                status = 'critical'
-            elif avg_load > 70:
-                status = 'warning'
-            else:
-                status = 'normal'
+            aggregated_results.append({
+                "aggregated_id": sensor_id,
+                "zone_id": zone_id,
+                "line_direction": line_direction,
+                "timestamp": current_time,
+                "aggregation_interval_sec": self.aggregation_interval_seconds,
+                "item_throughput": total_pass_events,
+                "avg_speed": avg_speed,
+                "sensor_status_breakdown": status_breakdown,
+                "bottleneck_indicator": {
+                    "is_congested": is_congested,
+                    "bottleneck_score": round(min(1.0, bottleneck_score), 2) # Ensure score is max 1.0
+                }
+            })
+            self.sensor_buffers[sensor_id] = [] # Clear buffer for this sensor
 
-            # zone_data_schema.json 형식에 맞춤 (온도 제외)
-            zone_data = {
-                **zone_info,  # id, name, type 등 기본 정보
-                "load": round(avg_load, 2),
-                "vib": round(avg_vib, 3),
-                "temp": 0, # 온도는 이제 사용하지 않으므로 0 또는 다른 기본값으로 설정
-                "status": status,
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            }
-            aggregated_zones.append(zone_data)
-        
-        # 처리가 끝난 버퍼 비우기
-        self.zone_data_buffer.clear()
-        
-        return aggregated_zones
+        self.last_aggregated_time = time.time()
+        return aggregated_results

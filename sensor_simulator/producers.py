@@ -29,18 +29,26 @@ class PrintProducer(DataProducer):
     def close(self):
         print("[PrintProducer]: Closed.")
 
+from kafka import KafkaProducer as PyKafkaProducer
+
 class KafkaProducer(DataProducer):
     """Kafka 토픽으로 데이터를 전송하는 프로듀서입니다."""
     
     def __init__(self, bootstrap_servers, topic):
-        # This is a mock implementation.
         self.topic = topic
+        self.producer = PyKafkaProducer(
+            bootstrap_servers=bootstrap_servers,
+            value_serializer=lambda v: json.dumps(v).encode('utf-8')
+        )
         print(f"Initialized KafkaProducer for topic '{topic}' at {bootstrap_servers}")
 
     def send_data(self, data):
-        print(f"Sending to Kafka topic '{self.topic}': {json.dumps(data)}")
+        self.producer.send(self.topic, data)
+        print(f"Sending data to Kafka topic '{self.topic}': {data}")
 
     def close(self):
+        self.producer.flush()
+        self.producer.close()
         print("KafkaProducer closed.")
 
 class WebSocketProducer(DataProducer):
