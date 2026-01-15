@@ -86,9 +86,8 @@ const MetricValue = styled.div`
 
 const VisualizationRow = styled.div`
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 24px;
-  height: 400px;
 `;
 
 const ChartContainer = styled.div`
@@ -202,17 +201,6 @@ const MicroPage = () => { // Renamed from LogisticsZoneAnalytics
 
       {/* 3. Visualizations */}
       <VisualizationRow>
-        {/* Trend Chart (Placeholder style as per image) */}
-        <ChartContainer>
-          <ChartTitle><Activity size={14} /> LOAD TELEMETRY TREND (REAL-TIME)</ChartTitle>
-          <div style={{ flex: 1, background: `linear-gradient(transparent, ${'rgba(59, 130, 246, 0.1)'})`, borderBottom: `2px solid ${'#3b82f6'}`, position: 'relative', overflow: 'hidden' }}>
-             {/* Simple SVG Wave to mimic chart in image */}
-             <svg width="100%" height="100%" viewBox="0 0 400 150" preserveAspectRatio="none">
-               <path d="M0,100 Q50,80 100,110 T200,90 T300,120 T400,80 L400,150 L0,150 Z" fill="rgba(59, 130, 246, 0.2)" stroke="#3b82f6" strokeWidth="2" />
-             </svg>
-          </div>
-        </ChartContainer>
-
         {/* Sensor Grid Flow */}
         <ChartContainer>
           <ChartTitle><LayoutDashboard size={14} /> RAIL SENSOR GRID FLOW (3 Lines)</ChartTitle>
@@ -226,6 +214,17 @@ const MicroPage = () => { // Renamed from LogisticsZoneAnalytics
               </SensorRow>
             ))}
           </SensorGrid>
+        </ChartContainer>
+        
+        {/* Trend Chart (Placeholder style as per image) */}
+        <ChartContainer>
+          <ChartTitle><Activity size={14} /> LOAD TELEMETRY TREND (REAL-TIME)</ChartTitle>
+          <div style={{ flex: 1, background: `linear-gradient(transparent, ${'rgba(59, 130, 246, 0.1)'})`, borderBottom: `2px solid ${'#3b82f6'}`, position: 'relative', overflow: 'hidden' }}>
+             {/* Simple SVG Wave to mimic chart in image */}
+             <svg width="100%" height="100%" viewBox="0 0 400 150" preserveAspectRatio="none">
+               <path d="M0,100 Q50,80 100,110 T200,90 T300,120 T400,80 L400,150 L0,150 Z" fill="rgba(59, 130, 246, 0.2)" stroke="#3b82f6" strokeWidth="2" />
+             </svg>
+          </div>
         </ChartContainer>
       </VisualizationRow>
     </PageContainer>

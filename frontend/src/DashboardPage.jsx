@@ -148,7 +148,13 @@ const MacroDashboardPage = () => {
   const [history, setHistory] = useState([]); 
   // 핵심 성과 지표(KPI) 데이터를 관리하는 상태
   const [kpiMetrics, setKpiMetrics] = useState({
-    orders: 12450, returns: 840, unloading: 5200, speed: 1.38, utilization: 84, throughput: 7240, loss: 7.53
+    orders: 12450,
+    returns: 840,
+    unloading: 5200,
+    loss: 7.53,
+    bottleneckCount: 28,
+    bottleneckWaitTime: 4.2,
+    bottleneckLoss: 1.2
   });
 
   // 현재 표시할 데이터 (재생 모드 여부에 따라 config 또는 history에서 가져옴)
@@ -198,6 +204,9 @@ const MacroDashboardPage = () => {
                 { label: 'Returns', value: kpiMetrics.returns.toLocaleString(), color: '#fbbf24', icon: <RotateCcw size={16}/> },
                 { label: 'Unloading', value: kpiMetrics.unloading.toLocaleString(), color: '#10b981', icon: <Truck size={16}/> },
                 { label: 'Loss Estimate', value: `₩${kpiMetrics.loss}M`, color: '#ef4444', icon: <TrendingDown size={16}/> },
+                { label: '병목 발생', value: `${kpiMetrics.bottleneckCount}건`, color: '#f97316', icon: <Zap size={16}/> },
+                { label: '병목 대기시간', value: `${kpiMetrics.bottleneckWaitTime}H`, color: '#f59e0b', icon: <Loader2 size={16}/> },
+                { label: '병목 손실액', value: `₩${kpiMetrics.bottleneckLoss}M`, color: '#ef4444', icon: <TrendingDown size={16}/> },
               ].map((kpi, i) => (
                 <KpiCard key={i}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>

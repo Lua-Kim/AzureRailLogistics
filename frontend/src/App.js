@@ -208,8 +208,8 @@ const AppContent = ({ themeMode, toggleTheme }) => {
           {/* 내비게이션 버튼들 */}
           <StyledNavLink to="/dashboard"><Layout size={24}/></StyledNavLink>
           <StyledNavLink to="/zone_analytics"><Activity size={24}/></StyledNavLink>
-          <StyledNavLink to="/logistis_management"><Server size={24}/></StyledNavLink>
           <StyledNavLink to="/logistis_rail_setting"><Box size={24}/></StyledNavLink>
+          <StyledNavLink to="/logistis_management"><Server size={24}/></StyledNavLink>
           <StyledNavLink to="/data_setting"><Database size={24}/></StyledNavLink>
 
           <ThemeToggleButton onClick={toggleTheme}>
@@ -235,8 +235,8 @@ const AppContent = ({ themeMode, toggleTheme }) => {
             <Route path="/" element={<Navigate to="/dashboard" />} />
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/zone_analytics" element={<ZoneAnalyticsPage />} />
-            <Route path="/logistis_management" element={<LogisticsManagementPage />} />
             <Route path="/logistis_rail_setting" element={<LogisticsRailSettingPage />} />
+            <Route path="/logistis_management" element={<LogisticsManagementPage />} />
             <Route path="/data_setting" element={<DataSettingPage />} />
           </Routes>
         </MainContent>

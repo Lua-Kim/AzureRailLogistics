@@ -1,39 +1,369 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import styled from 'styled-components';
+import { Plus, Edit, Trash2, X, Save, Box, Minus, Settings, AlertTriangle } from 'lucide-react';
 
-const EditorPageContainer = styled.div`
-  padding: 40px;
+// --- [Styled Components] ---
+
+const PageContainer = styled.div`
   color: ${props => props.theme.colors.text.main};
-  background-color: ${props => props.theme.colors.surfaceTransparent};
-  border-radius: 20px;
-  border: 1px solid ${props => props.theme.colors.border};
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  text-align: center;
+  animation: fadeIn 0.5s ease-out;
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+`;
+
+const PageHeader = styled.div`
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  justify-content: space-between;
   align-items: center;
-  min-height: 200px;
+  margin-bottom: 32px;
 `;
 
 const PageTitle = styled.h2`
-  font-size: 24px;
+  font-size: 32px;
   font-weight: 900;
+  color: ${props => props.theme.colors.text.main};
+  span {
+    color: ${props => props.theme.colors.primary};
+  }
+`;
+
+const AddButton = styled.button`
+  background-color: ${props => props.theme.colors.primary};
+  color: #fff;
+  border: none;
+  border-radius: ${props => props.theme.borderRadius};
+  padding: 12px 24px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+
+  &:hover {
+    opacity: 0.9;
+    box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+  }
+`;
+
+const ZoneListContainer = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 24px;
+`;
+
+const ZoneCard = styled.div`
+  background: ${props => props.theme.colors.surface};
+  border: 1px solid ${props => props.theme.colors.border};
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: all 0.3s ease;
+  
+  &:hover {
+    border-color: ${props => props.theme.colors.primary};
+    transform: translateY(-4px);
+  }
+`;
+
+const CardHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  font-size: 18px;
+  font-weight: 700;
+  color: ${props => props.theme.colors.text.main};
+  
+  .icon {
+    color: ${props => props.theme.colors.primary};
+  }
+`;
+
+const CardBody = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+`;
+
+const InfoRow = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  color: ${props => props.theme.colors.text.muted};
+  
+  span:last-child {
+    font-weight: 700;
+    font-family: 'monospace';
+    color: ${props => props.theme.colors.text.main};
+    font-size: 16px;
+  }
+`;
+
+const CardFooter = styled.div`
+  display: flex;
+  gap: 12px;
+  margin-top: auto;
+`;
+
+const ActionButton = styled.button`
+  flex: 1;
+  padding: 10px;
+  border-radius: ${props => props.theme.borderRadius};
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.3s ease;
+  
+  &.edit {
+    background: ${props => props.theme.colors.surfaceHighlight};
+    border: 1px solid ${props => props.theme.colors.border};
+    color: ${props => props.theme.colors.text.sub};
+    &:hover { background: ${props => props.theme.colors.border}; }
+  }
+  
+  &.delete {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: ${props => props.theme.colors.status.danger};
+    &:hover { background: rgba(239, 68, 68, 0.2); }
+  }
+`;
+
+const FormContainer = styled.div`
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  backdrop-filter: blur(5px);
+`;
+
+const Form = styled.form`
+  background: ${props => props.theme.colors.surface};
+  border: 1px solid ${props => props.theme.colors.border};
+  border-radius: 16px;
+  padding: 32px;
+  width: 100%;
+  max-width: 500px;
+  position: relative;
+  
+  h3 {
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0 0 24px 0;
+  }
+`;
+
+const CloseButton = styled.button`
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: transparent;
+  border: none;
+  color: ${props => props.theme.colors.text.muted};
+  cursor: pointer;
+`;
+
+const InputGroup = styled.div`
   margin-bottom: 20px;
 `;
 
-const PageContent = styled.p`
-  font-size: 16px;
-  color: ${props => props.theme.colors.text.sub};
+const Label = styled.label`
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: ${props => props.theme.colors.text.muted};
+  margin-bottom: 8px;
 `;
 
+const Input = styled.input`
+  width: 100%;
+  background-color: ${props => props.theme.colors.background};
+  border: 1px solid ${props => props.theme.colors.border};
+  border-radius: 8px;
+  padding: 12px;
+  color: ${props => props.theme.colors.text.main};
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+  
+  &:focus {
+    border-color: ${props => props.theme.colors.primary};
+  }
+`;
+
+const ValidationError = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: ${props => props.theme.colors.status.warning};
+  background-color: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 24px;
+`;
+
+
+// --- [Initial Data] ---
+const initialZones = [
+  { id: 'PK-01', name: 'Picking Zone Alpha', lines: 3, length: 20, sensors: 38 },
+  { id: 'SR-01', name: 'Sorter Area', lines: 4, length: 30, sensors: 55 },
+  { id: 'OT-01', name: 'Outbound Staging', lines: 2, length: 15, sensors: 30 },
+];
+
+
 const LogisticsRailSettingPage = () => {
+  const [zones, setZones] = useState(initialZones);
+  const [editingZone, setEditingZone] = useState(null); // null for creation, object for editing
+  const [showForm, setShowForm] = useState(false);
+  const [formData, setFormData] = useState({ id: '', name: '', lines: '', length: '', sensors: '' });
+  
+  const sensorError = useMemo(() => {
+    const { length, sensors } = formData;
+    if (!length || !sensors) return null;
+    if (parseInt(sensors, 10) > parseInt(length, 10) * 2) {
+      return `센서 개수 (${sensors})는 라인 길이 (${length}m)의 2배(${length * 2}개)를 초과할 수 없습니다.`;
+    }
+    return null;
+  }, [formData]);
+
+  const handleAdd = () => {
+    setEditingZone(null);
+    setFormData({ id: '', name: '', lines: '', length: '', sensors: '' });
+    setShowForm(true);
+  };
+
+  const handleEdit = (zone) => {
+    setEditingZone(zone);
+    setFormData(zone);
+    setShowForm(true);
+  };
+
+  const handleDelete = (zoneId) => {
+    if (window.confirm(`정말로 '${zoneId}' 구획을 삭제하시겠습니까?`)) {
+        setZones(zones.filter(z => z.id !== zoneId));
+    }
+  };
+
+  const handleFormChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (sensorError) {
+      alert('입력 값을 확인해주세요.');
+      return;
+    }
+    
+    const processedData = {
+        ...formData,
+        lines: parseInt(formData.lines, 10),
+        length: parseInt(formData.length, 10),
+        sensors: parseInt(formData.sensors, 10),
+    };
+
+    if (editingZone) { // Update
+      setZones(zones.map(z => z.id === editingZone.id ? processedData : z));
+    } else { // Create
+      const newZone = { ...processedData, id: processedData.id || `ZN-${Date.now()}` };
+      setZones([...zones, newZone]);
+    }
+    setShowForm(false);
+  };
+
+
   return (
-    <EditorPageContainer>
-      <PageTitle>Logistics Rail Setting</PageTitle>
-      <PageContent>This is a placeholder for the Logistics Rail Setting functionality.</PageContent>
-      <PageContent>You can define your editing tools and interface here.</PageContent>
-    </EditorPageContainer>
+    <PageContainer>
+      <PageHeader>
+        <PageTitle>레일 구획 <span>구성</span></PageTitle>
+        <AddButton onClick={handleAdd}>
+          <Plus size={18} />
+          새 구획 추가
+        </AddButton>
+      </PageHeader>
+
+      <ZoneListContainer>
+        {zones.map(zone => (
+          <ZoneCard key={zone.id}>
+            <CardHeader>
+              <span>{zone.name}</span>
+              <span className='icon'><Box size={20} /></span>
+            </CardHeader>
+            <CardBody>
+              <InfoRow><span>구획 ID</span> <span>{zone.id}</span></InfoRow>
+              <InfoRow><span>라인 개수</span> <span>{zone.lines}</span></InfoRow>
+              <InfoRow><span>라인 길이</span> <span>{zone.length} m</span></InfoRow>
+              <InfoRow><span>센서 개수</span> <span>{zone.sensors}</span></InfoRow>
+            </CardBody>
+            <CardFooter>
+              <ActionButton className="edit" onClick={() => handleEdit(zone)}><Edit size={14}/> 수정</ActionButton>
+              <ActionButton className="delete" onClick={() => handleDelete(zone.id)}><Trash2 size={14}/> 삭제</ActionButton>
+            </CardFooter>
+          </ZoneCard>
+        ))}
+      </ZoneListContainer>
+
+      {showForm && (
+        <FormContainer>
+          <Form onSubmit={handleSubmit}>
+            <CloseButton type="button" onClick={() => setShowForm(false)}><X/></CloseButton>
+            <h3>{editingZone ? '구획 정보 수정' : '새 구획 생성'}</h3>
+            
+            <InputGroup>
+              <Label htmlFor="id">구획 ID</Label>
+              <Input type="text" name="id" value={formData.id} onChange={handleFormChange} required disabled={!!editingZone} placeholder="e.g., PK-02"/>
+            </InputGroup>
+
+            <InputGroup>
+              <Label htmlFor="name">구획 이름</Label>
+              <Input type="text" name="name" value={formData.name} onChange={handleFormChange} required placeholder="e.g., Picking Zone Beta"/>
+            </InputGroup>
+
+            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px'}}>
+              <InputGroup>
+                <Label htmlFor="lines">라인 개수</Label>
+                <Input type="number" name="lines" value={formData.lines} onChange={handleFormChange} required min="1"/>
+              </InputGroup>
+              <InputGroup>
+                <Label htmlFor="length">라인 길이 (m)</Label>
+                <Input type="number" name="length" value={formData.length} onChange={handleFormChange} required min="1"/>
+              </InputGroup>
+            </div>
+            
+            <InputGroup>
+              <Label htmlFor="sensors">관측 센서 개수</Label>
+              <Input type="number" name="sensors" value={formData.sensors} onChange={handleFormChange} required min="0"/>
+            </InputGroup>
+
+            {sensorError && (
+              <ValidationError>
+                <AlertTriangle size={20} />
+                <span>{sensorError}</span>
+              </ValidationError>
+            )}
+
+            <div style={{ display: 'flex', gap: '12px', marginTop: '32px' }}>
+              <ActionButton as="button" type="button" className="edit" style={{flex: 1}} onClick={() => setShowForm(false)}>취소</ActionButton>
+              <AddButton as="button" type="submit" style={{flex: 2}} disabled={!!sensorError}><Save size={16}/> 저장</AddButton>
+            </div>
+          </Form>
+        </FormContainer>
+      )}
+    </PageContainer>
   );
 };
 
