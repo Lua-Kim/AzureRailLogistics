@@ -3,7 +3,7 @@ import styled, { keyframes, css } from 'styled-components';
 import { useNavigate } from 'react-router-dom';
 import { 
   ShoppingCart, RotateCcw, Truck, TrendingDown, Thermometer, Wind, Users, Cpu, ChevronRight,
-  BarChart3, Zap, Circle, BrainCircuit, Loader2, Play, Pause // Added new icons
+  BarChart3, Zap, Circle, BrainCircuit, Loader2
 } from 'lucide-react';
 
 // --- [Animations] ---
@@ -70,7 +70,8 @@ const AiButton = styled.button`
 // 리스트 뷰 전용 스타일
 const StatusTable = styled.div` width: 100%; display: flex; flex-direction: column; gap: 12px; margin-top: 32px; `;
 const ZoneRow = styled.div`
-  display: grid; grid-template-columns: 0.8fr 1.5fr 1.5fr 1fr 1fr 0.5fr;
+  display: grid; grid-template-columns: 0.8fr 1.5fr 1.5fr 1fr 1fr auto;
+  gap: 16px;
   align-items: center; background: ${props => props.theme.colors.surface}; border: 1px solid ${props => props.theme.colors.border};
   border-radius: 16px; padding: 16px 24px; cursor: pointer;
   &:hover { border-color: ${props => props.theme.colors.primary}; }
@@ -84,35 +85,7 @@ const LoadBar = styled.div`
   }
 `;
 
-// 재생바: 시뮬레이션 또는 데이터 이력 재생을 위한 컨트롤 바입니다.
-const PlaybackBar = styled.div`
-  background-color: ${props => props.theme.colors.surfaceTransparent};
-  padding: 20px;
-  border-radius: 16px;
-  border: 1px solid ${props => props.theme.colors.border};
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  margin-top: 32px;
-`;
 
-// 슬라이더: 재생바 내에서 시간 또는 데이터 포인트를 조절하는 데 사용됩니다.
-const Slider = styled.input.attrs({ type: 'range' })`
-  flex: 1;
-  height: 4px;
-  background: ${props => props.theme.colors.text.muted};
-  border-radius: 2px;
-  appearance: none;
-  cursor: pointer;
-
-  &::-webkit-slider-thumb {
-    appearance: none;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: ${props => props.theme.colors.primary};
-  }
-`;
 
 const MacroDashboardPage = () => {
   const navigate = useNavigate();
@@ -122,10 +95,7 @@ const MacroDashboardPage = () => {
   const [aiInsight, setAiInsight] = useState("");
   // AI 인사이트 생성 중인지 여부를 나타내는 상태
   const [isGenerating, setIsGenerating] = useState(false);
-  // 재생 모드 활성화 여부를 관리하는 상태
-  const [isPlaybackMode, setIsPlaybackMode] = useState(false);
-  // 재생 인덱스를 관리하는 상태 (데이터 이력 탐색용)
-  const [playbackIndex, setPlaybackIndex] = useState(0);
+
 
     // 대시보드 구성을 위한 데이터 (구역, 연결 등)
   const [config, setConfig] = useState({
@@ -144,8 +114,7 @@ const MacroDashboardPage = () => {
     ]
   });
 
-  // 데이터 변경 이력을 저장하는 상태 (재생 기능용)
-  const [history, setHistory] = useState([]); 
+
   // 핵심 성과 지표(KPI) 데이터를 관리하는 상태
   const [kpiMetrics, setKpiMetrics] = useState({
     orders: 12450,
@@ -157,14 +126,11 @@ const MacroDashboardPage = () => {
     bottleneckLoss: 1.2
   });
 
-  // 현재 표시할 데이터 (재생 모드 여부에 따라 config 또는 history에서 가져옴)
-  const currentData = isPlaybackMode ? history[playbackIndex] || config : config;
   // 현재 선택된 구역의 데이터를 찾습니다.
-  const selectedZone = currentData.zones.find(z => z.id === selectedZoneId) || currentData.zones[0];
+  const selectedZone = config.zones.find(z => z.id === selectedZoneId) || config.zones[0];
 
-  // 데이터 자동 업데이트 및 이력 저장 로직 (3초마다 실행)
+  // 데이터 자동 업데이트 로직 (3초마다 실행)
   useEffect(() => {
-    if (isPlaybackMode) return; // 재생 모드일 때는 업데이트하지 않음
     const interval = setInterval(() => {
       setConfig(prev => {
         const nextZones = prev.zones.map(z => {
@@ -175,15 +141,13 @@ const MacroDashboardPage = () => {
             status: nextLoad > 88 ? 'critical' : nextLoad > 70 ? 'warning' : 'normal' // 상태 업데이트
           };
         });
-        const newState = { ...prev, zones: nextZones, timestamp: new Date().toLocaleTimeString() };
-        setHistory(h => [newState, ...h].slice(0, 40)); // 이력에 최신 상태 추가 (최대 40개 유지)
-        return newState;
+        return { ...prev, zones: nextZones };
       });
-    }, 3000); // 3초마다 실행
+    }, 3000);
 
     // 컴포넌트 언마운트 시 인터벌 정리
     return () => clearInterval(interval);
-  }, [isPlaybackMode]); // isPlaybackMode가 변경될 때만 재실행
+  }, []);
 
   // AI 인사이트를 생성하는 함수
   const generateAIInsight = () => {
@@ -213,7 +177,7 @@ const MacroDashboardPage = () => {
                     <span style={{ fontSize: '10px', fontWeight: 900, color: 'inherit' }}>{kpi.label}</span>
                     <div style={{ padding: '6px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.1)', color: kpi.color }}>{kpi.icon}</div>
                   </div>
-                  <p style={{ fontSize: '24px', fontWeight: 900, fontFamily: 'monospace', margin: 0, color: 'inherit' }}>{kpi.value}</p>
+                  <p style={{ fontSize: '24px', fontWeight: 900, fontFamily: 'monospace', margin: 0, color: kpi.label === '병목 손실액' ? kpi.color : 'inherit' }}>{kpi.value}</p>
                 </KpiCard>
               ))}
             </KpiGrid>
@@ -233,28 +197,22 @@ const MacroDashboardPage = () => {
             </AiBanner>
 
             <StatusTable>
-            {currentData.zones.map(zone => (
+            {config.zones.map(zone => (
               <ZoneRow key={zone.id} onClick={() => { setSelectedZoneId(zone.id); navigate('/zone_analytics', { state: { zoneId: zone.id, zoneName: zone.name } }); }}>
                 <span style={{ color: 'inherit', fontWeight: 900 }}>{zone.id}</span>
                 <span style={{ fontWeight: 800 }}>{zone.name}</span>
                 <div>
-                  <div style={{ fontSize: '12px', marginBottom: '4px' }}>{zone.load}%</div>
+                  <div style={{ fontSize: '12px', marginBottom: '4px' }}>{zone.load.toFixed(1)}%</div>
                   <LoadBar val={zone.load} />
                 </div>
-                <span style={{ fontWeight: 900, color: zone.temp > 60 ? 'red' : 'inherit' }}>{zone.temp}°C</span>
+                <span style={{ fontWeight: 900, color: zone.temp > 60 ? 'red' : 'inherit' }}>{zone.temp.toFixed(1)}°C</span>
                 <span style={{ color: zone.status === 'warning' ? '#f59e0b' : '#10b981', fontSize: '10px' }}>{zone.status.toUpperCase()}</span>
                 <ChevronRight size={18} color="#475569" />
               </ZoneRow>
             ))}
           </StatusTable>
 
-            {/* 데이터 재생 컨트롤 바 */}
-            <PlaybackBar>
-              <button onClick={() => setIsPlaybackMode(!isPlaybackMode)} style={{ background: isPlaybackMode ? '#f59e0b' : 'grey', border: 'none', padding: '14px', borderRadius: '12px', color: 'white', cursor: 'pointer' }}>
-                {isPlaybackMode ? <Pause size={20}/> : <Play size={20}/>}
-              </button>
-              <Slider min="0" max={Math.max(0, history.length - 1)} value={playbackIndex} onChange={(e) => { setPlaybackIndex(parseInt(e.target.value)); setIsPlaybackMode(true); }} />
-            </PlaybackBar>
+
         </>
     );
 };
