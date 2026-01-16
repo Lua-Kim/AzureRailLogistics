@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import styled from 'styled-components';
-import { Plus, Edit, Trash2, X, Save, Box, Minus, Settings, AlertTriangle } from 'lucide-react';
+import { Plus, Edit, Trash2, X, Save, Box, Minus, Settings, AlertTriangle, BarChart3 } from 'lucide-react';
 
 // --- [Styled Components] ---
 
@@ -82,6 +82,88 @@ const ZoneListContainer = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
   gap: 24px;
+  margin-bottom: 48px;
+`;
+
+// 그래프 컨테이너
+const ChartSection = styled.div`
+  margin-top: 48px;
+  padding-top: 32px;
+  border-top: 1px solid ${props => props.theme.colors.border};
+`;
+
+const ChartTitle = styled.h3`
+  font-size: 24px;
+  font-weight: 900;
+  color: ${props => props.theme.colors.text.main};
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+`;
+
+const ChartGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 24px;
+`;
+
+const ChartCard = styled.div`
+  background: ${props => props.theme.colors.surface};
+  border: 1px solid ${props => props.theme.colors.border};
+  border-radius: 16px;
+  padding: 24px;
+`;
+
+const ChartCardTitle = styled.h4`
+  font-size: 14px;
+  font-weight: 800;
+  color: ${props => props.theme.colors.text.muted};
+  margin-bottom: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+`;
+
+const BarChartContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+`;
+
+const BarRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+`;
+
+const BarLabel = styled.div`
+  min-width: 80px;
+  font-size: 12px;
+  font-weight: 700;
+  color: ${props => props.theme.colors.text.sub};
+`;
+
+const BarTrack = styled.div`
+  flex: 1;
+  height: 24px;
+  background: ${props => props.theme.colors.background};
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+`;
+
+const BarFill = styled.div`
+  height: 100%;
+  background: ${props => props.theme.colors.primary};
+  width: ${props => props.width}%;
+  transition: width 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 8px;
+  font-size: 11px;
+  font-weight: 900;
+  color: white;
 `;
 
 const ZoneCard = styled.div`
@@ -290,6 +372,36 @@ const LogisticsRailSettingPage = () => {
     return null;
   }, [formData]);
 
+  // 그래프 데이터 계산
+  const chartData = useMemo(() => {
+    const maxLines = Math.max(...zones.map(z => z.lines));
+    const maxSensors = Math.max(...zones.map(z => z.sensors));
+    const maxLength = Math.max(...zones.map(z => z.length));
+    
+    return {
+      linesData: zones.map(z => ({
+        label: z.id,
+        value: z.lines,
+        percent: (z.lines / maxLines) * 100
+      })),
+      sensorsData: zones.map(z => ({
+        label: z.id,
+        value: z.sensors,
+        percent: (z.sensors / maxSensors) * 100
+      })),
+      lengthData: zones.map(z => ({
+        label: z.id,
+        value: z.length,
+        percent: (z.length / maxLength) * 100
+      })),
+      sensorsPerLine: zones.map(z => ({
+        label: z.id,
+        value: (z.sensors / z.lines).toFixed(1),
+        percent: ((z.sensors / z.lines) / Math.max(...zones.map(zz => zz.sensors / zz.lines))) * 100
+      }))
+    };
+  }, [zones]);
+
   const handleAdd = () => {
     setEditingZone(null);
     setFormData({ id: '', name: '', lines: '', length: '', sensors: '' });
@@ -379,6 +491,76 @@ const LogisticsRailSettingPage = () => {
           </ZoneCard>
         ))}
       </ZoneListContainer>
+
+      {/* 그래프 섹션 */}
+      <ChartSection>
+        <ChartTitle>
+          <BarChart3 size={28} />
+          구역별 통계 시각화
+        </ChartTitle>
+        
+        <ChartGrid>
+          {/* 라인 개수 그래프 */}
+          <ChartCard>
+            <ChartCardTitle>라인 개수 (Lines per Zone)</ChartCardTitle>
+            <BarChartContainer>
+              {chartData.linesData.map(item => (
+                <BarRow key={item.label}>
+                  <BarLabel>{item.label}</BarLabel>
+                  <BarTrack>
+                    <BarFill width={item.percent}>{item.value}</BarFill>
+                  </BarTrack>
+                </BarRow>
+              ))}
+            </BarChartContainer>
+          </ChartCard>
+
+          {/* 센서 개수 그래프 */}
+          <ChartCard>
+            <ChartCardTitle>센서 개수 (Sensors per Zone)</ChartCardTitle>
+            <BarChartContainer>
+              {chartData.sensorsData.map(item => (
+                <BarRow key={item.label}>
+                  <BarLabel>{item.label}</BarLabel>
+                  <BarTrack>
+                    <BarFill width={item.percent}>{item.value}</BarFill>
+                  </BarTrack>
+                </BarRow>
+              ))}
+            </BarChartContainer>
+          </ChartCard>
+
+          {/* 라인 길이 그래프 */}
+          <ChartCard>
+            <ChartCardTitle>라인 길이 (Length per Zone)</ChartCardTitle>
+            <BarChartContainer>
+              {chartData.lengthData.map(item => (
+                <BarRow key={item.label}>
+                  <BarLabel>{item.label}</BarLabel>
+                  <BarTrack>
+                    <BarFill width={item.percent}>{item.value}m</BarFill>
+                  </BarTrack>
+                </BarRow>
+              ))}
+            </BarChartContainer>
+          </ChartCard>
+
+          {/* 라인당 센서 밀도 그래프 */}
+          <ChartCard>
+            <ChartCardTitle>라인당 센서 밀도 (Sensors per Line)</ChartCardTitle>
+            <BarChartContainer>
+              {chartData.sensorsPerLine.map(item => (
+                <BarRow key={item.label}>
+                  <BarLabel>{item.label}</BarLabel>
+                  <BarTrack>
+                    <BarFill width={item.percent}>{item.value}</BarFill>
+                  </BarTrack>
+                </BarRow>
+              ))}
+            </BarChartContainer>
+          </ChartCard>
+        </ChartGrid>
+      </ChartSection>
 
       {showForm && (
         <FormContainer>

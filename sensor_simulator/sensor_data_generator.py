@@ -1,7 +1,9 @@
 import json
 import random
+import time
 from datetime import datetime
 from enum import Enum
+from kafka import KafkaProducer
 
 # 구역 설정 (메가FC 기준)
 ZONES = [
@@ -18,20 +20,12 @@ class Direction(Enum):
     FORWARD = "FORWARD"
     STOP = "STOP"
 
-class Status(Enum):
-    NORMAL = "NORMAL"
-    WARNING = "WARNING"
-    ERROR = "ERROR"
-    OFFLINE = "OFFLINE"
-
 
 class SensorDataGenerator:
     """가상센서 데이터 생성 클래스"""
     
     def __init__(self):
         self.zones = ZONES
-        self.basket_counter = 1
-        self.active_baskets = {}  # 현재 이동 중인 바스켓
     
     def generate_sensor_id(self, zone_id: str, sensor_number: int) -> str:
         """센서 ID 생성"""
@@ -56,22 +50,28 @@ class SensorDataGenerator:
             })
         return sensors
     
-    def generate_single_event(self, zone_id: str, sensor_info: dict, is_moving: bool = False) -> dict:
-        """단일 센서 이벤트 생성"""
+    def generate_single_event(self, zone_id: str, sensor_info: dict, signal_probability: float = 0.6, speed_percent: float = 50.0) -> dict:
+        """단일 센서 이벤트 생성
         
-        # 이동 여부에 따른 데이터 생성
+        Args:
+            zone_id: 구역 ID
+            sensor_info: 센서 정보
+            signal_probability: signal이 true일 확률 (0.0 ~ 1.0)
+            speed_percent: 속도 퍼센트 (0 ~ 100)
+        """
+        
+        # 이동 여부 결정
+        is_moving = random.random() < signal_probability
+        
         if is_moving:
             signal = True
             direction = Direction.FORWARD.value
-            speed = random.uniform(1.5, 3.0)
-            basket_id = random.choice(list(self.active_baskets.keys())) if self.active_baskets else None
-            basket_weight = random.uniform(10.0, 25.0)
+            max_speed = 100.0
+            speed = round(max_speed * (speed_percent / 100), 2)
         else:
             signal = False
             direction = Direction.STOP.value
             speed = 0.0
-            basket_id = None
-            basket_weight = 0.0
 
         event = {
             "zone_id": zone_id,
@@ -79,7 +79,7 @@ class SensorDataGenerator:
             "sensor_id": sensor_info["sensor_id"],
             "signal": signal,
             "direction": direction,
-            "speed": round(speed, 2),
+            "speed": speed,
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
         
@@ -100,8 +100,7 @@ class SensorDataGenerator:
         
         events = []
         for sensor_info in active_sensors:
-            is_moving = random.random() < 0.6  # 60% 확률로 이동 중
-            event = self.generate_single_event(zone_id, sensor_info, is_moving)
+            event = self.generate_single_event(zone_id, sensor_info)
             events.append(event)
         
         return events
@@ -125,24 +124,56 @@ class SensorDataGenerator:
             batch.extend(events)
         
         return batch
+    
+    def stream_to_kafka(self, bootstrap_servers='localhost:9092', topic='sensor-events', signal_probability: float = 0.6, speed_percent: float = 50.0):
+        """Kafka로 센서 데이터 스트리밍
+        
+        Args:
+            bootstrap_servers: Kafka 부트스트랩 서버
+            topic: Kafka 토픽명
+            signal_probability: signal이 true일 확률 (0.0 ~ 1.0, 기본값: 0.6)
+            speed_percent: 속도 퍼센트 (0 ~ 100, 기본값: 50)
+        """
+        producer = KafkaProducer(
+            bootstrap_servers=bootstrap_servers,
+            value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode('utf-8')
+        )
+        
+        try:
+            print(f"Kafka 연결됨: {bootstrap_servers}")
+            print(f"Topic: {topic}")
+            print(f"Signal 확률: {signal_probability * 100:.0f}%")
+            print(f"속도: {speed_percent}% (최대 100.0 %)")
+            print("센서 데이터 스트리밍 시작...\n")
+            print(f"총 센서: {sum(z['sensors'] for z in self.zones)}개\n")
+            
+            while True:
+                events_sent = 0
+                
+                # 모든 구역의 모든 센서에서 이벤트 생성
+                for zone in self.zones:
+                    zone_id = zone["zone_id"]
+                    sensors = self.get_zone_sensors(zone_id)
+                    
+                    for sensor_info in sensors:
+                        event = self.generate_single_event(zone_id, sensor_info, signal_probability, speed_percent)
+                        producer.send(topic, event)
+                        events_sent += 1
+                
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] {events_sent}개 이벤트 전송")
+                
+                # 1초 대기
+                time.sleep(1)
+                
+        except KeyboardInterrupt:
+            print("\n스트리밍 중지")
+        finally:
+            producer.close()
 
 
 # 테스트
 if __name__ == "__main__":
     generator = SensorDataGenerator()
     
-    # 1. 단일 구역의 이벤트 생성
-    print("=== 입고(IB-01) 구역 이벤트 ===")
-    ib_events = generator.generate_zone_events("IB-01", event_count=10)
-    print(json.dumps(ib_events[:10], indent=2, ensure_ascii=False))
-    
-    # 2. 모든 구역의 이벤트 생성
-    print("\n=== 모든 구역 이벤트 (샘플) ===")
-    all_events = generator.generate_all_zones_events()
-    print(f"총 이벤트: {len(all_events)}개")
-    print(json.dumps(all_events[:5], indent=2, ensure_ascii=False))
-    
-    # 3. 배치 생성
-    print("\n=== 배치 데이터 (크기: 20) ===")
-    batch = generator.generate_batch(batch_size=20)
-    print(f"배치 이벤트: {len(batch)}개")
+    # Kafka 스트리밍 시작
+    generator.stream_to_kafka()

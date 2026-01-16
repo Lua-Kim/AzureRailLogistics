@@ -3,7 +3,7 @@ import styled, { keyframes } from 'styled-components';
 import { useLocation } from 'react-router-dom';
 import { 
   BarChart3, Activity, Repeat, Zap, Cpu, Clock, 
-  ChevronRight, Circle, LayoutDashboard, Loader2, AlertTriangle 
+  ChevronRight, Circle, LayoutDashboard, Loader2, AlertTriangle, TrendingUp
 } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { apiService } from './api';
@@ -273,13 +273,17 @@ const MicroPage = () => {
           return;
         }
         
-        const historyData = await apiService.getSensorHistory(zoneId, 20);
-        setSensorData(historyData);
+        const historyData = await apiService.getSensorHistory(zoneId, 50);
         
-        if (historyData.length > 0) {
-          const latest = historyData[0];
-          const avgThroughput = historyData.reduce((sum, d) => sum + d.item_throughput, 0) / historyData.length;
-          const avgSpeed = historyData.reduce((sum, d) => sum + d.avg_speed, 0) / historyData.length;
+        // 응답이 배열인지 확인, 아니면 빈 배열로 설정
+        const dataArray = Array.isArray(historyData) ? historyData : [];
+        // 최근 50개만 유지
+        setSensorData(dataArray.slice(-50));
+        
+        if (dataArray.length > 0) {
+          const latest = dataArray[0];
+          const avgThroughput = dataArray.reduce((sum, d) => sum + (d.item_throughput || 0), 0) / dataArray.length;
+          const avgSpeed = dataArray.reduce((sum, d) => sum + (d.avg_speed || 0), 0) / dataArray.length;
           
           setMetrics({
             tph: Math.round(avgThroughput),
@@ -324,81 +328,44 @@ const MicroPage = () => {
     );
   }
 
-  // 라인별 센서 그룹화
-  const groupBySensorLine = () => {
+  // 라인별 센서 데이터 그룹화 - 실시간 센서 이벤트를 라인별로 정렬
+  const groupSensorDataByLine = () => {
     const grouped = {};
-    sensorData.forEach(sensor => {
-      if (!grouped[sensor.line_direction]) {
-        grouped[sensor.line_direction] = [];
+    
+    if (!Array.isArray(sensorData)) {
+      return {};
+    }
+    
+    // line_id별로 이벤트를 그룹화
+    sensorData.forEach((event) => {
+      const lineId = event.line_id;
+      if (!grouped[lineId]) {
+        grouped[lineId] = [];
       }
-      grouped[sensor.line_direction].push(sensor);
+      grouped[lineId].push({
+        timestamp: event.timestamp,
+        speed: event.speed,
+        signal: event.signal,
+        sensor_id: event.sensor_id
+      });
     });
+    
     return grouped;
   };
 
-  // 색상 결정 함수 (물동량과 속도 기반)
-  const getSensorColor = (throughput, speed) => {
-    if (throughput === 0) return '#6b7280'; // 오프라인
-    if (speed < 1.0) return '#ef4444'; // 병목 - 빨강 (거의 정지)
-    if (speed < 2.0) return '#fbbf24'; // 주의 - 노랑 (저속)
-    return '#10b981'; // 정상 - 초록 (정상 속도)
+  // 라인별 속도 그래프 데이터 생성
+  const getLineSpeedChartData = (lineEvents) => {
+    return lineEvents.map((event, idx) => ({
+      time: idx,
+      speed: event.speed,
+      sensor: event.sensor_id.substring(event.sensor_id.length - 5)
+    }));
   };
 
-  const sensorsByLine = groupBySensorLine();
+  const sensorsByLine = groupSensorDataByLine();
 
   return (
     <PageContainer>
-      {/* 라인 시각화 */}
-      <LineVisualizationContainer>
-        <LineTitle>
-          <Activity size={16} />
-          {zoneId} 라인별 센서 상태
-        </LineTitle>
-        <LineFlowVisualization>
-          {Object.entries(sensorsByLine).map(([line, sensors]) => (
-            <LineRow key={line}>
-              <LineLabel>{line}</LineLabel>
-              <SensorLine>
-                {sensors.map((sensor, idx) => {
-                  const color = getSensorColor(sensor.item_throughput, sensor.avg_speed);
-                  const isPulse = color === '#ef4444'; // 병목 센서는 애니메이션
-                  return (
-                    <SensorNode
-                      key={idx}
-                      color={color}
-                      pulse={isPulse}
-                      title={`${sensor.aggregated_id}\n물동량: ${sensor.item_throughput}\n속도: ${sensor.avg_speed.toFixed(2)}`}
-                    >
-                      {idx + 1}
-                    </SensorNode>
-                  );
-                })}
-              </SensorLine>
-            </LineRow>
-          ))}
-        </LineFlowVisualization>
-        
-        {/* 범례 */}
-        <div style={{ display: 'flex', gap: '24px', marginTop: '24px', paddingTop: '24px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#10b981' }} />
-            <span style={{ fontSize: '11px', color: '#9ca3af' }}>정상 (속도 2.5↑)</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#fbbf24' }} />
-            <span style={{ fontSize: '11px', color: '#9ca3af' }}>주의 (속도 1.5~2.5)</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ef4444' }} />
-            <span style={{ fontSize: '11px', color: '#9ca3af' }}>병목 (속도 1.5↓)</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#6b7280' }} />
-            <span style={{ fontSize: '11px', color: '#9ca3af' }}>오프라인</span>
-          </div>
-        </div>
-      </LineVisualizationContainer>
-
       {/* 1. Header Section */}
       <TopHeader>
         <TitleSection>
@@ -406,158 +373,134 @@ const MicroPage = () => {
             <h2>Logistics Zone <span>ANALYTICS</span></h2>
             <ZoneBadge>{zoneName || zoneId}</ZoneBadge>
           </div>
-          <p>{zoneId} | OPERATIONAL COST FOCUS</p>
+          <p>{zoneId} | REAL-TIME SENSOR DATA</p>
         </TitleSection>
         <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'inherit', padding: '8px 16px', borderRadius: '20px', border: `1px solid ${'#1e293b'}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'inherit', padding: '8px 16px', borderRadius: '20px', border: `1px solid #1e293b` }}>
             <Circle size={8} fill="#10b981" color="#10b981" />
-            <span style={{ fontSize: '10px', fontWeight: 900, color: 'inherit' }}>LIVE: ANALYTICS ACTIVE</span>
+            <span style={{ fontSize: '10px', fontWeight: 900, color: 'inherit' }}>LIVE: {sensorData.length} EVENTS</span>
           </div>
-          <LossCard>
-            <h4>TARGET ZONE LOSS ESTIMATE</h4>
-            <p>₩{(metrics.bottleneck * 58.4).toLocaleString()}</p>
-          </LossCard>
         </div>
       </TopHeader>
 
       {/* 2. KPI Metrics Grid */}
       <MetricsGrid>
         <MetricCard>
-          <MetricHeader><span style={{ color: 'inherit' }}>TPH (Throughput)</span><BarChart3 size={18} /></MetricHeader>
+          <MetricHeader><span style={{ color: 'inherit' }}>Total Events</span><BarChart3 size={18} /></MetricHeader>
           <MetricValue>
-            <h3>{metrics.tph}</h3>
-            <p>Units/hr</p>
+            <h3>{sensorData.length}</h3>
+            <p>Received</p>
           </MetricValue>
         </MetricCard>
         <MetricCard>
-          <MetricHeader><span style={{ color: 'inherit' }}>Congestion Index</span><Activity size={18} color="#fbbf24" /></MetricHeader>
+          <MetricHeader><span style={{ color: 'inherit' }}>Active Lines</span><Activity size={18} color="#fbbf24" /></MetricHeader>
           <MetricValue>
-            <h3>{metrics.congestion}%</h3>
-            <p>Density</p>
+            <h3>{Object.keys(sensorsByLine).length}</h3>
+            <p>Lines</p>
           </MetricValue>
         </MetricCard>
         <MetricCard>
-          <MetricHeader><span style={{ color: 'inherit' }}>Recirculation</span><Repeat size={18} color="#10b981" /></MetricHeader>
-          <MetricValue>
-            <h3>{metrics.recirculation}%</h3>
-            <p>Loop Rate</p>
-          </MetricValue>
-        </MetricCard>
-        <MetricCard>
-          <MetricHeader><span style={{ color: 'inherit' }}>Energy Efficiency</span><Zap size={18} /></MetricHeader>
+          <MetricHeader><span style={{ color: 'inherit' }}>Avg Speed</span><Repeat size={18} color="#10b981" /></MetricHeader>
           <MetricValue>
             <h3>{metrics.efficiency}%</h3>
-            <p>kW/Load</p>
+            <p>Speed</p>
           </MetricValue>
         </MetricCard>
         <MetricCard>
-          <MetricHeader><span style={{ color: 'inherit' }}>OEE Status</span><Cpu size={18} color="#10b981" /></MetricHeader>
+          <MetricHeader><span style={{ color: 'inherit' }}>Signal True</span><Zap size={18} /></MetricHeader>
           <MetricValue>
-            <h3>{metrics.oee}%</h3>
-            <p>Health</p>
+            <h3>{sensorData.filter(e => e.signal).length}</h3>
+            <p>Active</p>
+          </MetricValue>
+        </MetricCard>
+        <MetricCard>
+          <MetricHeader><span style={{ color: 'inherit' }}>Bottleneck</span><Cpu size={18} color="#ef4444" /></MetricHeader>
+          <MetricValue>
+            <h3>{metrics.bottleneck}</h3>
+            <p>Events</p>
           </MetricValue>
         </MetricCard>
       </MetricsGrid>
 
-      {/* 3. Visualizations */}
-      <VisualizationRow style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-        {/* 시간대별 처리량 */}
-        <ChartContainer>
-          <ChartTitle><BarChart3 size={14} /> 시간대별 처리량 추이</ChartTitle>
-          <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={sensorData.map((d, i) => ({
-              time: `${i}s`,
-              throughput: d.item_throughput
-            }))}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-              <XAxis dataKey="time" stroke="rgba(255,255,255,0.5)" />
-              <YAxis stroke="rgba(255,255,255,0.5)" />
-              <Tooltip 
-                contentStyle={{ background: 'rgba(0,0,0,0.8)', border: '1px solid #3b82f6' }}
-                labelStyle={{ color: '#fff' }}
-              />
-              <Line type="monotone" dataKey="throughput" stroke="#3b82f6" isAnimationActive={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartContainer>
-        
-        {/* 시간대별 평균 속도 */}
-        <ChartContainer>
-          <ChartTitle><Activity size={14} /> 시간대별 평균 속도</ChartTitle>
-          <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={sensorData.map((d, i) => ({
-              time: `${i}s`,
-              speed: d.avg_speed
-            }))}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-              <XAxis dataKey="time" stroke="rgba(255,255,255,0.5)" />
-              <YAxis stroke="rgba(255,255,255,0.5)" />
-              <Tooltip 
-                contentStyle={{ background: 'rgba(0,0,0,0.8)', border: '1px solid #10b981' }}
-                labelStyle={{ color: '#fff' }}
-              />
-              <Line type="monotone" dataKey="speed" stroke="#10b981" isAnimationActive={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartContainer>
+      {/* 3. 라인별 속도 그래프 */}
+      <VisualizationRow>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {Object.entries(sensorsByLine).map(([lineId, events]) => (
+            <ChartContainer key={lineId}>
+              <ChartTitle>
+                <TrendingUp size={14} />
+                {lineId} - 속도 데이터 ({events.length} events)
+              </ChartTitle>
+              <ResponsiveContainer width="100%" height={250}>
+                <LineChart data={getLineSpeedChartData(events)}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                  <XAxis 
+                    dataKey="time" 
+                    stroke="rgba(255,255,255,0.5)"
+                    label={{ value: 'Event Index', position: 'insideBottomRight', offset: -5 }}
+                  />
+                  <YAxis 
+                    stroke="rgba(255,255,255,0.5)"
+                    label={{ value: 'Speed (%)', angle: -90, position: 'insideLeft' }}
+                  />
+                  <Tooltip 
+                    contentStyle={{ background: 'rgba(0,0,0,0.9)', border: '1px solid #3b82f6' }}
+                    labelStyle={{ color: '#fff' }}
+                    formatter={(value) => `${value}%`}
+                  />
+                  <Legend />
+                  <Line 
+                    type="monotone" 
+                    dataKey="speed" 
+                    stroke="#3b82f6" 
+                    isAnimationActive={true}
+                    animationDuration={300}
+                    dot={{ r: 3 }}
+                    name="Speed"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </ChartContainer>
+          ))}
+        </div>
       </VisualizationRow>
 
-      {/* 센서 상태 분포 및 병목 스코어 */}
+      {/* 4. 센서 이벤트 요약 */}
       <VisualizationRow style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-        {/* 센서 상태 분포 */}
         <ChartContainer>
-          <ChartTitle><Cpu size={14} /> 센서 상태 분포</ChartTitle>
-          <ResponsiveContainer width="100%" height={250}>
-            <PieChart>
-              <Pie
-                data={sensorData.length > 0 ? [
-                  { name: '정상', value: sensorData[0].sensor_status_breakdown?.정상 || 0, fill: '#10b981' },
-                  { name: '경고', value: sensorData[0].sensor_status_breakdown?.경고 || 0, fill: '#fbbf24' },
-                  { name: '오류', value: sensorData[0].sensor_status_breakdown?.오류 || 0, fill: '#ef4444' },
-                  { name: '오프라인', value: sensorData[0].sensor_status_breakdown?.오프라인 || 0, fill: '#6b7280' }
-                ] : []}
-                cx="50%"
-                cy="50%"
-                innerRadius={60}
-                outerRadius={90}
-                paddingAngle={5}
-                dataKey="value"
-              >
-                {sensorData.length > 0 && [
-                  { name: '정상', value: sensorData[0].sensor_status_breakdown?.정상 || 0, fill: '#10b981' },
-                  { name: '경고', value: sensorData[0].sensor_status_breakdown?.경고 || 0, fill: '#fbbf24' },
-                  { name: '오류', value: sensorData[0].sensor_status_breakdown?.오류 || 0, fill: '#ef4444' },
-                  { name: '오프라인', value: sensorData[0].sensor_status_breakdown?.오프라인 || 0, fill: '#6b7280' }
-                ].map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.fill} />
-                ))}
-              </Pie>
-              <Tooltip 
-                contentStyle={{ background: 'rgba(0,0,0,0.8)', border: '1px solid #3b82f6' }}
-              />
-              <Legend />
-            </PieChart>
+          <ChartTitle><Activity size={14} /> 신호 분포</ChartTitle>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={[
+              { name: 'Signal True', value: sensorData.filter(e => e.signal).length, fill: '#10b981' },
+              { name: 'Signal False', value: sensorData.filter(e => !e.signal).length, fill: '#ef4444' }
+            ]}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+              <XAxis dataKey="name" stroke="rgba(255,255,255,0.5)" />
+              <YAxis stroke="rgba(255,255,255,0.5)" />
+              <Tooltip contentStyle={{ background: 'rgba(0,0,0,0.8)', border: '1px solid #3b82f6' }} />
+              <Bar dataKey="value" fill="#3b82f6" isAnimationActive={true} animationDuration={300} />
+            </BarChart>
           </ResponsiveContainer>
         </ChartContainer>
 
-        {/* 병목 스코어 추이 */}
         <ChartContainer>
-          <ChartTitle><AlertTriangle size={14} /> 병목 스코어 추이</ChartTitle>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={sensorData.map((d, i) => ({
-              time: `${i}s`,
-              bottleneck: (d.bottleneck_indicator?.bottleneck_score || 0) * 100
-            }))}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-              <XAxis dataKey="time" stroke="rgba(255,255,255,0.5)" />
-              <YAxis stroke="rgba(255,255,255,0.5)" />
-              <Tooltip 
-                contentStyle={{ background: 'rgba(0,0,0,0.8)', border: '1px solid #ef4444' }}
-                labelStyle={{ color: '#fff' }}
-              />
-              <Bar dataKey="bottleneck" fill="#ef4444" isAnimationActive={false} />
-            </BarChart>
-          </ResponsiveContainer>
+          <ChartTitle><Clock size={14} /> 최근 이벤트 목록</ChartTitle>
+          <div style={{ fontSize: '11px', color: '#9ca3af', maxHeight: '200px', overflowY: 'auto' }}>
+            {sensorData.slice(0, 10).map((event, idx) => (
+              <div key={idx} style={{ padding: '8px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                <div style={{ fontWeight: 700, color: '#fff' }}>
+                  {event.sensor_id.substring(event.sensor_id.length - 5)}
+                </div>
+                <div>
+                  Speed: <span style={{ color: '#3b82f6' }}>{event.speed}%</span>
+                  {' | '} 
+                  Signal: <span style={{ color: event.signal ? '#10b981' : '#ef4444' }}>
+                    {event.signal ? 'ON' : 'OFF'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
         </ChartContainer>
       </VisualizationRow>
     </PageContainer>

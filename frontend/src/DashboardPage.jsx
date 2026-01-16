@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import styled, { keyframes, css } from 'styled-components';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -6,6 +6,17 @@ import {
   BarChart3, Zap, Circle, BrainCircuit, Loader2, AlertTriangle, Activity
 } from 'lucide-react';
 import { apiService } from './api';
+
+// 센서 구성 (메가FC 기준)
+const ZONE_SENSOR_CONFIG = {
+  'IB-01': 40,   // 입고
+  'IS-01': 50,   // 검수
+  'ST-RC': 300,  // 랙 보관
+  'PK-01': 200,  // 피킹
+  'PC-01': 50,   // 가공
+  'SR-01': 160,  // 분류
+  'OB-01': 40    // 출고
+};
 
 // --- [Animations] ---
 const fadeIn = keyframes`
@@ -300,7 +311,7 @@ const MacroDashboardPage = () => {
   };
 
   // 실시간 데이터 가져오기
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const [summaryData, bottleneckData] = await Promise.all([
         apiService.getZonesSummary(1),
@@ -309,47 +320,39 @@ const MacroDashboardPage = () => {
       
       setError(null);
       
-      // 이전 데이터와 비교해서 실제로 변경된 경우만 업데이트
-      setZonesSummary(prev => {
-        if (JSON.stringify(prev) !== JSON.stringify(summaryData)) {
-          return summaryData;
-        }
-        return prev;
-      });
+      // 데이터가 실제로 변경되었는지 확인
+      const summaryChanged = JSON.stringify(zonesSummary) !== JSON.stringify(summaryData);
+      const bottleneckChanged = JSON.stringify(bottlenecks) !== JSON.stringify(bottleneckData);
       
-      setBottlenecks(prev => {
-        if (JSON.stringify(prev) !== JSON.stringify(bottleneckData)) {
-          return bottleneckData;
-        }
-        return prev;
-      });
+      if (summaryChanged) {
+        setZonesSummary(summaryData);
+      }
       
-      // KPI 계산
-      const totalThroughput = summaryData.reduce((sum, zone) => sum + zone.total_throughput, 0);
-      const avgSpeed = summaryData.length > 0 
-        ? summaryData.reduce((sum, zone) => sum + zone.avg_speed, 0) / summaryData.length 
-        : 0;
+      if (bottleneckChanged) {
+        setBottlenecks(bottleneckData);
+      }
       
-      const newMetrics = {
-        totalThroughput,
-        avgSpeed: avgSpeed.toFixed(2),
-        bottleneckCount: bottleneckData.length,
-        normalSensors: summaryData.reduce((sum, zone) => sum + zone.data_points, 0),
-        totalSensors: summaryData.length
-      };
-      
-      setKpiMetrics(prev => {
-        if (JSON.stringify(prev) !== JSON.stringify(newMetrics)) {
-          return newMetrics;
-        }
-        return prev;
-      });
+      // KPI는 summary 데이터가 변경되었을 때만 재계산
+      if (summaryChanged) {
+        const totalThroughput = summaryData.reduce((sum, zone) => sum + zone.total_throughput, 0);
+        const avgSpeed = summaryData.length > 0 
+          ? summaryData.reduce((sum, zone) => sum + zone.avg_speed, 0) / summaryData.length 
+          : 0;
+        
+        setKpiMetrics({
+          totalThroughput,
+          avgSpeed: avgSpeed.toFixed(2),
+          bottleneckCount: bottleneckData.length,
+          normalSensors: summaryData.reduce((sum, zone) => sum + zone.data_points, 0),
+          totalSensors: summaryData.length
+        });
+      }
       
     } catch (err) {
       console.error('데이터 가져오기 실패:', err);
       setError('데이터를 불러올 수 없습니다. 백엔드 서버 상태를 확인하세요.');
     }
-  };
+  }, [zonesSummary, bottlenecks]);
 
   // 초기 로드 및 5초마다 자동 새로고침
   useEffect(() => {
@@ -363,7 +366,7 @@ const MacroDashboardPage = () => {
     loadInitial();
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchData]);
 
   // AI 인사이트를 생성하는 함수
   const generateAIInsight = () => {
@@ -441,7 +444,13 @@ const MacroDashboardPage = () => {
           return (
             <ZoneRow 
               key={zone.zone_id} 
-              onClick={() => navigate('/zone_analytics', { state: { zoneId: zone.zone_id, zoneName: zone.zone_id } })}
+              onClick={() => navigate('/zone_analytics', { 
+                state: { 
+                  zoneId: zone.zone_id, 
+                  zoneName: zone.zone_id,
+                  sensorCount: ZONE_SENSOR_CONFIG[zone.zone_id] || 100
+                } 
+              })}
             >
               <span style={{ color: 'inherit', fontWeight: 900 }}>{zone.zone_id}</span>
               <span style={{ fontWeight: 800 }}>처리량: {zone.total_throughput}</span>
