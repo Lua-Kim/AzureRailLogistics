@@ -262,6 +262,7 @@ const MacroDashboardPage = () => {
   
   // 실제 데이터
   const [zonesSummary, setZonesSummary] = useState([]);
+  const [zonesConfig, setZonesConfig] = useState([]);
   const [bottlenecks, setBottlenecks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -313,9 +314,10 @@ const MacroDashboardPage = () => {
   // 실시간 데이터 가져오기
   const fetchData = useCallback(async () => {
     try {
-      const [summaryData, bottleneckData] = await Promise.all([
+      const [summaryData, bottleneckData, configData] = await Promise.all([
         apiService.getZonesSummary(1),
-        apiService.getBottlenecks(1)
+        apiService.getBottlenecks(1),
+        apiService.getZonesConfig()
       ]);
       
       setError(null);
@@ -323,6 +325,7 @@ const MacroDashboardPage = () => {
       // 데이터가 실제로 변경되었는지 확인
       const summaryChanged = JSON.stringify(zonesSummary) !== JSON.stringify(summaryData);
       const bottleneckChanged = JSON.stringify(bottlenecks) !== JSON.stringify(bottleneckData);
+      const configChanged = JSON.stringify(zonesConfig) !== JSON.stringify(configData);
       
       if (summaryChanged) {
         setZonesSummary(summaryData);
@@ -330,6 +333,10 @@ const MacroDashboardPage = () => {
       
       if (bottleneckChanged) {
         setBottlenecks(bottleneckData);
+      }
+      
+      if (configChanged) {
+        setZonesConfig(configData);
       }
       
       // KPI는 summary 데이터가 변경되었을 때만 재계산
@@ -352,7 +359,7 @@ const MacroDashboardPage = () => {
       console.error('데이터 가져오기 실패:', err);
       setError('데이터를 불러올 수 없습니다. 백엔드 서버 상태를 확인하세요.');
     }
-  }, [zonesSummary, bottlenecks]);
+  }, [zonesSummary, bottlenecks, zonesConfig]);
 
   // 초기 로드 및 5초마다 자동 새로고침
   useEffect(() => {
@@ -441,6 +448,14 @@ const MacroDashboardPage = () => {
           const status = zone.bottleneck_count > 3 ? 'critical' : zone.avg_speed < 1.5 ? 'warning' : 'normal';
           const loadPercent = Math.min(100, (zone.total_throughput / 100) * 100);
           
+          // zonesConfig에서 센서 개수 찾기
+          const zoneConfig = zonesConfig.find(z => z.zone_id === zone.zone_id);
+          
+          if (!zoneConfig) {
+            console.warn(`Zone config not found for ${zone.zone_id}`);
+            return null; // 설정 없으면 표시 안 함
+          }
+          
           return (
             <ZoneRow 
               key={zone.zone_id} 
@@ -448,7 +463,7 @@ const MacroDashboardPage = () => {
                 state: { 
                   zoneId: zone.zone_id, 
                   zoneName: zone.zone_id,
-                  sensorCount: ZONE_SENSOR_CONFIG[zone.zone_id] || 100
+                  sensorCount: zoneConfig.sensors
                 } 
               })}
             >

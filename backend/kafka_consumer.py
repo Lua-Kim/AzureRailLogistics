@@ -11,7 +11,7 @@ class SensorEventConsumer:
         self.topic = topic
         self.consumer = None
         self.latest_events = []  # 최근 이벤트 저장 (메모리)
-        self.max_events = 100  # 최대 100개만 유지
+        self.max_events = 2000  # 최대 2000개까지 유지 (그래프 표시용 버퍼 확대)
         self.is_running = False
         
     def start(self):
@@ -20,7 +20,7 @@ class SensorEventConsumer:
             self.topic,
             bootstrap_servers=self.bootstrap_servers,
             value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-            auto_offset_reset='latest',  # 최신 메시지부터
+            auto_offset_reset='earliest',  # 가능한 한 과거부터 읽어 그래프 데이터 확보
             enable_auto_commit=True
         )
         

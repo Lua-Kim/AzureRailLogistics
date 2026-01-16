@@ -1,6 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 from kafka_consumer import SensorEventConsumer
+from database import init_db, get_db
+from models import LogisticsZone
+from schemas import LogisticsZoneCreate, LogisticsZone as LogisticsZoneSchema
+from typing import List
 
 app = FastAPI(title="Azure Rail Logistics Backend")
 
@@ -19,6 +24,7 @@ consumer = SensorEventConsumer()
 @app.on_event("startup")
 async def startup_event():
     """서버 시작 시 Kafka Consumer 시작"""
+    init_db()  # 데이터베이스 초기화
     consumer.start()
     print("Backend 서버 시작 완료")
 
@@ -136,6 +142,62 @@ async def get_sensor_history(zone_id: str = None, count: int = 100):
     
     # 최근 count개만 반환
     return filtered_events[-count:]
+
+# ============ ZONES 설정 API ============
+
+@app.get("/zones/config", response_model=List[LogisticsZoneSchema])
+async def get_zones_config(db: Session = Depends(get_db)):
+    """현재 zones 설정 조회"""
+    zones = db.query(LogisticsZone).all()
+    return zones
+
+@app.post("/zones/config", response_model=LogisticsZoneSchema)
+async def create_zone(zone: LogisticsZoneCreate, db: Session = Depends(get_db)):
+    """새 zone 추가"""
+    db_zone = LogisticsZone(**zone.dict())
+    db.add(db_zone)
+    db.commit()
+    db.refresh(db_zone)
+    return db_zone
+
+@app.put("/zones/config/{zone_id}", response_model=LogisticsZoneSchema)
+async def update_zone(zone_id: str, zone: LogisticsZoneCreate, db: Session = Depends(get_db)):
+    """zone 업데이트"""
+    db_zone = db.query(LogisticsZone).filter(LogisticsZone.zone_id == zone_id).first()
+    if not db_zone:
+        return {"error": "Zone not found"}
+    
+    for key, value in zone.dict().items():
+        setattr(db_zone, key, value)
+    db.commit()
+    db.refresh(db_zone)
+    return db_zone
+
+@app.delete("/zones/config/{zone_id}")
+async def delete_zone(zone_id: str, db: Session = Depends(get_db)):
+    """zone 삭제"""
+    db_zone = db.query(LogisticsZone).filter(LogisticsZone.zone_id == zone_id).first()
+    if not db_zone:
+        return {"error": "Zone not found"}
+    
+    db.delete(db_zone)
+    db.commit()
+    return {"deleted": zone_id}
+
+@app.post("/zones/config/batch")
+async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = Depends(get_db)):
+    """zones 전체 설정 (기존 데이터 전부 교체)"""
+    # 기존 데이터 삭제
+    db.query(LogisticsZone).delete()
+    
+    # 새 데이터 추가
+    for zone in zones_list:
+        db_zone = LogisticsZone(**zone.dict())
+        db.add(db_zone)
+    
+    db.commit()
+    result = db.query(LogisticsZone).all()
+    return result
 
 if __name__ == "__main__":
     import uvicorn

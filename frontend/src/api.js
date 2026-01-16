@@ -40,6 +40,37 @@ export const apiService = {
     return response.data;
   },
 
+  // ========== ZONES 설정 API ==========
+  // zones 설정 조회
+  getZonesConfig: async () => {
+    const response = await api.get('/zones/config');
+    return response.data;
+  },
+
+  // zone 추가
+  createZone: async (zone) => {
+    const response = await api.post('/zones/config', zone);
+    return response.data;
+  },
+
+  // zone 업데이트
+  updateZone: async (zoneId, zone) => {
+    const response = await api.put(`/zones/config/${zoneId}`, zone);
+    return response.data;
+  },
+
+  // zone 삭제
+  deleteZone: async (zoneId) => {
+    const response = await api.delete(`/zones/config/${zoneId}`);
+    return response.data;
+  },
+
+  // zones 전체 설정 (일괄 저장)
+  setZonesBatch: async (zones) => {
+    const response = await api.post('/zones/config/batch', zones);
+    return response.data;
+  },
+
   // 병목 현상 감지 (임시로 빈 배열 반환)
   getBottlenecks: async (hours = 1) => {
     return { bottlenecks: [] };

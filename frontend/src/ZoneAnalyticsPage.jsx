@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { useLocation } from 'react-router-dom';
 import { 
@@ -252,7 +252,11 @@ const GridBox = styled.div`
 // --- [Main Component] ---
 const MicroPage = () => {
   const location = useLocation();
-  const { zoneId, zoneName } = location.state || { zoneId: null, zoneName: 'Unknown Zone' };
+  const { zoneId, zoneName, sensorCount } = location.state || { 
+    zoneId: 'IB-01',  // 기본값: 입고(INBOUND)
+    zoneName: '입고', 
+    sensorCount: 40 
+  };
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -260,52 +264,53 @@ const MicroPage = () => {
   const [metrics, setMetrics] = useState({
     tph: 0, congestion: 0, recirculation: 0, efficiency: 0, oee: 0, bottleneck: 0
   });
+  const isInitialLoad = useRef(true);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        setLoading(true);
+        if (isInitialLoad.current) {
+          setLoading(true); // 초회 로드에서만 로딩 스피너 표시
+        }
         setError(null);
         
-        if (!zoneId) {
-          setError('Zone ID가 선택되지 않았습니다');
-          setLoading(false);
-          return;
-        }
-        
-        const historyData = await apiService.getSensorHistory(zoneId, 50);
+        const historyData = await apiService.getSensorHistory(zoneId, sensorCount);
         
         // 응답이 배열인지 확인, 아니면 빈 배열로 설정
         const dataArray = Array.isArray(historyData) ? historyData : [];
-        // 최근 50개만 유지
-        setSensorData(dataArray.slice(-50));
+        setSensorData(dataArray.slice(-sensorCount));
         
         if (dataArray.length > 0) {
-          const latest = dataArray[0];
-          const avgThroughput = dataArray.reduce((sum, d) => sum + (d.item_throughput || 0), 0) / dataArray.length;
-          const avgSpeed = dataArray.reduce((sum, d) => sum + (d.avg_speed || 0), 0) / dataArray.length;
+          // 원본 센서 데이터에서 metrics 계산
+          const activeEvents = dataArray.filter(e => e.signal);
+          const avgSpeed = activeEvents.length > 0
+            ? activeEvents.reduce((sum, e) => sum + e.speed, 0) / activeEvents.length
+            : 0;
           
           setMetrics({
-            tph: Math.round(avgThroughput),
+            tph: activeEvents.length,
             congestion: Math.round(100 - avgSpeed),
-            recirculation: latest.bottleneck_indicator?.recirculation_rate || 0,
+            recirculation: 0,
             efficiency: Math.round(avgSpeed),
             oee: Math.round(avgSpeed * 0.85),
-            bottleneck: latest.bottleneck_indicator?.bottleneck_score || 0
+            bottleneck: dataArray.filter(e => e.speed < 30).length
           });
         }
       } catch (err) {
         console.error('Failed to fetch zone analytics:', err);
         setError('데이터를 불러오는데 실패했습니다');
       } finally {
-        setLoading(false);
+        if (isInitialLoad.current) {
+          isInitialLoad.current = false;
+          setLoading(false);
+        }
       }
     };
 
     fetchData();
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
-  }, [zoneId]);
+  }, [zoneId, sensorCount]);
 
   if (loading) {
     return (
@@ -338,15 +343,15 @@ const MicroPage = () => {
     
     // line_id별로 이벤트를 그룹화
     sensorData.forEach((event) => {
-      const lineId = event.line_id;
+      const lineId = event.line_id || 'LINE-1';
       if (!grouped[lineId]) {
         grouped[lineId] = [];
       }
       grouped[lineId].push({
         timestamp: event.timestamp,
-        speed: event.speed,
+        speed: event.speed ?? 0,
         signal: event.signal,
-        sensor_id: event.sensor_id
+        sensor_id: event.sensor_id || 'sensor-unk'
       });
     });
     
@@ -358,11 +363,17 @@ const MicroPage = () => {
     return lineEvents.map((event, idx) => ({
       time: idx,
       speed: event.speed,
-      sensor: event.sensor_id.substring(event.sensor_id.length - 5)
+      sensor: event.sensor_id ? event.sensor_id.substring(event.sensor_id.length - 5) : 'UNK'
     }));
   };
 
   const sensorsByLine = groupSensorDataByLine();
+  const hasLineCharts = Object.keys(sensorsByLine).length > 0;
+  const fallbackLineData = sensorData.map((event, idx) => ({
+    time: idx,
+    speed: event.speed ?? 0,
+    sensor: event.sensor_id ? event.sensor_id.substring(event.sensor_id.length - 5) : 'UNK'
+  }));
 
   return (
     <PageContainer>

@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import styled from 'styled-components';
 import { Plus, Edit, Trash2, X, Save, Box, Minus, Settings, AlertTriangle, BarChart3 } from 'lucide-react';
+import { apiService } from './api';
 
 // --- [Styled Components] ---
 
@@ -23,7 +24,7 @@ const PageHeader = styled.div`
 const PresetContainer = styled.div`
   display: flex;
   gap: 12px;
-  margin-bottom: 32px;
+  margin: 32px 0;
   align-items: center;
 `;
 
@@ -89,6 +90,7 @@ const ZoneListContainer = styled.div`
 const ChartSection = styled.div`
   margin-top: 48px;
   padding-top: 32px;
+  padding-bottom: 32px;
   border-top: 1px solid ${props => props.theme.colors.border};
 `;
 
@@ -104,48 +106,48 @@ const ChartTitle = styled.h3`
 
 const ChartGrid = styled.div`
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-  gap: 24px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
 `;
 
 const ChartCard = styled.div`
   background: ${props => props.theme.colors.surface};
   border: 1px solid ${props => props.theme.colors.border};
-  border-radius: 16px;
-  padding: 24px;
+  border-radius: 12px;
+  padding: 12px;
 `;
 
 const ChartCardTitle = styled.h4`
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 800;
   color: ${props => props.theme.colors.text.muted};
-  margin-bottom: 20px;
+  margin-bottom: 12px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
 `;
 
 const BarChartContainer = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 `;
 
 const BarRow = styled.div`
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 `;
 
 const BarLabel = styled.div`
-  min-width: 80px;
-  font-size: 12px;
+  min-width: 60px;
+  font-size: 11px;
   font-weight: 700;
   color: ${props => props.theme.colors.text.sub};
 `;
 
 const BarTrack = styled.div`
   flex: 1;
-  height: 24px;
+  height: 12px;
   background: ${props => props.theme.colors.background};
   border-radius: 4px;
   position: relative;
@@ -160,9 +162,9 @@ const BarFill = styled.div`
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding-right: 8px;
-  font-size: 11px;
-  font-weight: 900;
+  padding-right: 6px;
+  font-size: 10px;
+  font-weight: 800;
   color: white;
 `;
 
@@ -358,10 +360,63 @@ const initialZones = presets.megaFc;
 
 
 const LogisticsRailSettingPage = () => {
-  const [zones, setZones] = useState(initialZones);
-  const [editingZone, setEditingZone] = useState(null); // null for creation, object for editing
+  const [zones, setZones] = useState([]);
+  const [editingZone, setEditingZone] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({ id: '', name: '', lines: '', length: '', sensors: '' });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  
+  // 초기 zones 로드
+  useEffect(() => {
+    const loadZones = async () => {
+      try {
+        const data = await apiService.getZonesConfig();
+        if (data && data.length > 0) {
+          // DB에서 로드 (zone_id를 id로 매핑)
+          setZones(data.map(z => ({
+            id: z.zone_id,
+            name: z.name,
+            lines: z.lines,
+            length: z.length,
+            sensors: z.sensors
+          })));
+        } else {
+          // DB가 비어있으면 기본 preset 저장
+          await apiService.setZonesBatch(initialZones.map(z => ({
+            zone_id: z.id,
+            name: z.name,
+            lines: z.lines,
+            length: z.length,
+            sensors: z.sensors
+          })));
+          setZones(initialZones);
+        }
+        setError(null);
+      } catch (error) {
+        console.error('zones 로드 실패:', error);
+        setError('설정을 불러올 수 없습니다. 서버 연결을 확인하세요.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadZones();
+  }, []);
+  
+  // zones 변경 시 DB에 저장
+  const saveZonesToDB = async (updatedZones) => {
+    try {
+      await apiService.setZonesBatch(updatedZones.map(z => ({
+        zone_id: z.id,
+        name: z.name,
+        lines: z.lines,
+        length: z.length,
+        sensors: z.sensors
+      })));
+    } catch (error) {
+      console.error('zones 저장 실패:', error);
+    }
+  };
   
   const sensorError = useMemo(() => {
     const { length, sensors } = formData;
@@ -414,9 +469,11 @@ const LogisticsRailSettingPage = () => {
     setShowForm(true);
   };
 
-  const handleDelete = (zoneId) => {
+  const handleDelete = async (zoneId) => {
     if (window.confirm(`정말로 '${zoneId}' 구획을 삭제하시겠습니까?`)) {
-        setZones(zones.filter(z => z.id !== zoneId));
+        const updatedZones = zones.filter(z => z.id !== zoneId);
+        setZones(updatedZones);
+        await saveZonesToDB(updatedZones);
     }
   };
 
@@ -425,7 +482,7 @@ const LogisticsRailSettingPage = () => {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (sensorError) {
       alert('입력 값을 확인해주세요.');
@@ -439,18 +496,23 @@ const LogisticsRailSettingPage = () => {
         sensors: parseInt(formData.sensors, 10),
     };
 
+    let updatedZones;
     if (editingZone) { // Update
-      setZones(zones.map(z => z.id === editingZone.id ? processedData : z));
+      updatedZones = zones.map(z => z.id === editingZone.id ? processedData : z);
     } else { // Create
       const newZone = { ...processedData, id: processedData.id || `ZN-${Date.now()}` };
-      setZones([...zones, newZone]);
+      updatedZones = [...zones, newZone];
     }
+    setZones(updatedZones);
+    await saveZonesToDB(updatedZones);
     setShowForm(false);
   };
 
 
-  const handlePresetClick = (presetKey) => {
-    setZones(presets[presetKey]);
+  const handlePresetClick = async (presetKey) => {
+    const newZones = presets[presetKey];
+    setZones(newZones);
+    await saveZonesToDB(newZones);
   };
 
   return (
@@ -463,36 +525,8 @@ const LogisticsRailSettingPage = () => {
         </AddButton>
       </PageHeader>
 
-      <PresetContainer>
-        <PresetLabel>기능별 프리셋:</PresetLabel>
-        <PresetButton onClick={() => handlePresetClick('mfc')}>소형/도심 MFC</PresetButton>
-        <PresetButton onClick={() => handlePresetClick('tc')}>통과형 센터 (TC)</PresetButton>
-        <PresetButton onClick={() => handlePresetClick('dc')}>광역 배송 센터 (DC)</PresetButton>
-        <PresetButton onClick={() => handlePresetClick('megaFc')}>메가 풀필먼트 (FC)</PresetButton>
-      </PresetContainer>
-
-      <ZoneListContainer>
-        {zones.map(zone => (
-          <ZoneCard key={zone.id}>
-            <CardHeader>
-              <span>{zone.name}</span>
-              <span className='icon'><Box size={20} /></span>
-            </CardHeader>
-            <CardBody>
-              <InfoRow><span>구획 ID</span> <span>{zone.id}</span></InfoRow>
-              <InfoRow><span>라인 개수</span> <span>{zone.lines}</span></InfoRow>
-              <InfoRow><span>라인 길이</span> <span>{zone.length} m</span></InfoRow>
-              <InfoRow><span>센서 개수</span> <span>{zone.sensors}</span></InfoRow>
-            </CardBody>
-            <CardFooter>
-              <ActionButton className="edit" onClick={() => handleEdit(zone)}><Edit size={14}/> 수정</ActionButton>
-              <ActionButton className="delete" onClick={() => handleDelete(zone.id)}><Trash2 size={14}/> 삭제</ActionButton>
-            </CardFooter>
-          </ZoneCard>
-        ))}
-      </ZoneListContainer>
-
       {/* 그래프 섹션 */}
+      {!error && zones.length > 0 && (
       <ChartSection>
         <ChartTitle>
           <BarChart3 size={28} />
@@ -561,6 +595,44 @@ const LogisticsRailSettingPage = () => {
           </ChartCard>
         </ChartGrid>
       </ChartSection>
+      )}
+
+      <PresetContainer>
+        <PresetLabel>기능별 프리셋:</PresetLabel>
+        <PresetButton onClick={() => handlePresetClick('mfc')}>소형/도심 MFC</PresetButton>
+        <PresetButton onClick={() => handlePresetClick('tc')}>통과형 센터 (TC)</PresetButton>
+        <PresetButton onClick={() => handlePresetClick('dc')}>광역 배송 센터 (DC)</PresetButton>
+        <PresetButton onClick={() => handlePresetClick('megaFc')}>메가 풀필먼트 (FC)</PresetButton>
+      </PresetContainer>
+
+      {error ? (
+        <div style={{ textAlign: 'center', padding: '40px', color: '#ef4444' }}>
+          <AlertTriangle size={48} style={{ marginBottom: '16px' }} />
+          <h3>{error}</h3>
+          <p style={{ marginTop: '8px', fontSize: '14px' }}>백엔드 서버와 데이터베이스 연결을 확인하세요.</p>
+        </div>
+      ) : (
+        <ZoneListContainer>
+          {zones.map(zone => (
+            <ZoneCard key={zone.id}>
+            <CardHeader>
+              <span>{zone.name}</span>
+              <span className='icon'><Box size={20} /></span>
+            </CardHeader>
+            <CardBody>
+              <InfoRow><span>구획 ID</span> <span>{zone.id}</span></InfoRow>
+              <InfoRow><span>라인 개수</span> <span>{zone.lines}</span></InfoRow>
+              <InfoRow><span>라인 길이</span> <span>{zone.length} m</span></InfoRow>
+              <InfoRow><span>센서 개수</span> <span>{zone.sensors}</span></InfoRow>
+            </CardBody>
+            <CardFooter>
+              <ActionButton className="edit" onClick={() => handleEdit(zone)}><Edit size={14}/> 수정</ActionButton>
+              <ActionButton className="delete" onClick={() => handleDelete(zone.id)}><Trash2 size={14}/> 삭제</ActionButton>
+            </CardFooter>
+          </ZoneCard>
+        ))}
+      </ZoneListContainer>
+      )}
 
       {showForm && (
         <FormContainer>
