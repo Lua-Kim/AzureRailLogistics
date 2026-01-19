@@ -17,10 +17,79 @@ const fadeIn = keyframes`
 // --- [Styled Components] ---
 const PageContainer = styled.div`
   display: flex;
-  flex-direction: column;
-  gap: 32px;
+  flex-direction: row;
+  gap: 0;
   animation: ${fadeIn} 0.6s ease-out;
   color: ${props => props.theme.colors.text.main};
+  height: 100%;
+`;
+
+const MainContentWrapper = styled.div`
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  overflow-y: auto;
+  padding-right: 24px;
+`;
+
+const RightSidebar = styled.div`
+  width: 320px;
+  height: 100vh;
+  background: ${props => props.theme.colors.surface};
+  border-left: 1px solid ${props => props.theme.colors.border};
+  padding: 24px;
+  overflow-y: auto;
+  flex-shrink: 0;
+  animation: ${fadeIn} 0.3s ease-out;
+  box-sizing: border-box;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: ${props => props.theme.colors.border};
+    border-radius: 3px;
+  }
+`;
+
+const SidebarTitle = styled.h3`
+  font-size: 16px;
+  font-weight: 900;
+  color: ${props => props.theme.colors.text.main};
+  margin: 0 0 24px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`;
+
+const SidebarSection = styled.div`
+  margin-bottom: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid ${props => props.theme.colors.border};
+
+  &:last-child {
+    border-bottom: none;
+  }
+`;
+
+const SectionLabel = styled.label`
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  color: ${props => props.theme.colors.text.muted};
+  margin-bottom: 12px;
+  text-transform: uppercase;
+`;
+
+const SectionValue = styled.div`
+  font-size: 14px;
+  font-weight: 700;
+  color: ${props => props.theme.colors.text.main};
+  margin-bottom: 8px;
 `;
 
 const TopHeader = styled.div`
@@ -255,12 +324,14 @@ const MicroPage = () => {
   const { zoneId, zoneName, sensorCount } = location.state || { 
     zoneId: 'IB-01',  // 기본값: 입고(INBOUND)
     zoneName: '입고', 
-    sensorCount: 40 
+    sensorCount: 0
   };
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [sensorData, setSensorData] = useState([]);
+  const [eventLimit, setEventLimit] = useState(sensorCount || 400);
+  const [signalProbability, setSignalProbability] = useState(60);
   const [metrics, setMetrics] = useState({
     tph: 0, congestion: 0, recirculation: 0, efficiency: 0, oee: 0, bottleneck: 0
   });
@@ -274,11 +345,11 @@ const MicroPage = () => {
         }
         setError(null);
         
-        const historyData = await apiService.getSensorHistory(zoneId, sensorCount);
+        const historyData = await apiService.getSensorHistory(zoneId, eventLimit);
         
         // 응답이 배열인지 확인, 아니면 빈 배열로 설정
         const dataArray = Array.isArray(historyData) ? historyData : [];
-        setSensorData(dataArray.slice(-sensorCount));
+        setSensorData(dataArray.slice(-eventLimit));
         
         if (dataArray.length > 0) {
           // 원본 센서 데이터에서 metrics 계산
@@ -310,7 +381,7 @@ const MicroPage = () => {
     fetchData();
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
-  }, [zoneId, sensorCount]);
+  }, [zoneId, eventLimit]);
 
   if (loading) {
     return (
@@ -375,8 +446,12 @@ const MicroPage = () => {
     sensor: event.sensor_id ? event.sensor_id.substring(event.sensor_id.length - 5) : 'UNK'
   }));
 
+  const signalTrueCount = sensorData.filter(e => e.signal).length;
+  const signalFalseCount = Math.max(sensorData.length - signalTrueCount, 0);
+
   return (
     <PageContainer>
+      <MainContentWrapper>
       {/* 1. Header Section */}
       <TopHeader>
         <TitleSection>
@@ -397,10 +472,10 @@ const MicroPage = () => {
       {/* 2. KPI Metrics Grid */}
       <MetricsGrid>
         <MetricCard>
-          <MetricHeader><span style={{ color: 'inherit' }}>Total Events</span><BarChart3 size={18} /></MetricHeader>
+          <MetricHeader><span style={{ color: 'inherit' }}>Logistics Volume</span><BarChart3 size={18} /></MetricHeader>
           <MetricValue>
-            <h3>{sensorData.length}</h3>
-            <p>Received</p>
+            <h3>{signalTrueCount}</h3>
+            <p>sec (Signal True)</p>
           </MetricValue>
         </MetricCard>
         <MetricCard>
@@ -514,6 +589,47 @@ const MicroPage = () => {
           </div>
         </ChartContainer>
       </VisualizationRow>
+      </MainContentWrapper>
+
+      {/* 오른쪽 사이드바 */}
+      <RightSidebar>
+        <SidebarTitle>
+          <BarChart3 size={18} />
+          분석 도구
+        </SidebarTitle>
+
+        <SidebarSection>
+          <SectionLabel>Signal True 확률 (%)</SectionLabel>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={signalProbability}
+              onChange={(e) => setSignalProbability(Number(e.target.value))}
+              style={{
+                flex: 1,
+                height: '6px',
+                borderRadius: '3px',
+                background: 'rgba(59, 130, 246, 0.2)',
+                outline: 'none',
+                cursor: 'pointer',
+                accentColor: '#3b82f6'
+              }}
+            />
+            <SectionValue style={{ minWidth: '50px', textAlign: 'right' }}>
+              {signalProbability}%
+            </SectionValue>
+          </div>
+          <p style={{ fontSize: '10px', color: '#9ca3af', marginTop: '8px' }}>
+            현재 화면에 표시 중인 이벤트 수: {signalTrueCount + signalFalseCount}건
+          </p>
+        </SidebarSection>
+
+        <div style={{ marginTop: '24px', padding: '16px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '12px', fontSize: '11px', color: '#9ca3af', lineHeight: '1.6' }}>
+          💡 <strong>참고:</strong> 슬라이더는 표시용 확률 값입니다. 실제 시뮬레이터 확률은 별도 설정을 따라갑니다.
+        </div>
+      </RightSidebar>
     </PageContainer>
   );
 };

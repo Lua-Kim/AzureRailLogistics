@@ -6,6 +6,12 @@ from database import init_db, get_db
 from models import LogisticsZone
 from schemas import LogisticsZoneCreate, LogisticsZone as LogisticsZoneSchema
 from typing import List
+import sys
+import os
+
+# sensor_simulator 경로 추가
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'sensor_simulator'))
+from basket_manager import BasketPool
 
 app = FastAPI(title="Azure Rail Logistics Backend")
 
@@ -20,6 +26,9 @@ app.add_middleware(
 
 # Kafka Consumer 인스턴스
 consumer = SensorEventConsumer()
+
+# Basket Pool 인스턴스
+basket_pool = BasketPool(pool_size=100)
 
 @app.on_event("startup")
 async def startup_event():
@@ -129,6 +138,36 @@ async def get_zones_summary():
     
     return result
 
+@app.get("/bottlenecks")
+async def get_bottlenecks():
+    """병목 현상 감지 - signal이 true이면서 속도가 30% 이하인 이벤트 반환"""
+    events = consumer.latest_events
+    
+    if not events:
+        return []
+    
+    # signal이 true이면서 속도가 30% 이하인 이벤트를 병목으로 간주
+    bottleneck_events = [e for e in events if e.get("signal") == True and e.get("speed", 100) < 30]
+    
+    # zone_id별로 병목 점수 계산
+    bottleneck_zones = {}
+    for event in bottleneck_events:
+        zone_id = event.get("zone_id")
+        if zone_id:
+            if zone_id not in bottleneck_zones:
+                bottleneck_zones[zone_id] = {
+                    "zone_id": zone_id,
+                    "aggregated_id": f"BOTTLENECK-{zone_id}",
+                    "bottleneck_score": 0.0,
+                    "count": 0
+                }
+            bottleneck_zones[zone_id]["count"] += 1
+            bottleneck_zones[zone_id]["bottleneck_score"] = min(1.0, bottleneck_zones[zone_id]["count"] / 10)
+    
+    # 점수 내림차순 정렬
+    result = sorted(bottleneck_zones.values(), key=lambda x: x["bottleneck_score"], reverse=True)
+    return result
+
 @app.get("/sensors/history")
 async def get_sensor_history(zone_id: str = None, count: int = 100):
     """센서 히스토리 조회 - 원본 센서 데이터 반환 (집계 X)"""
@@ -199,6 +238,24 @@ async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = D
     result = db.query(LogisticsZone).all()
     return result
 
+@app.get("/baskets")
+async def get_all_baskets():
+    """전체 바스켓 조회"""
+    baskets = basket_pool.get_all_baskets()
+    return {
+        "count": len(baskets),
+        "baskets": list(baskets.values())
+    }
+
+@app.get("/baskets/{basket_id}")
+async def get_basket(basket_id: str):
+    """특정 바스켓 조회"""
+    basket = basket_pool.get_basket(basket_id)
+    if basket:
+        return basket
+    return {"error": "Basket not found"}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

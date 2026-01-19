@@ -71,9 +71,10 @@ export const apiService = {
     return response.data;
   },
 
-  // 병목 현상 감지 (임시로 빈 배열 반환)
+  // 병목 현상 감지
   getBottlenecks: async (hours = 1) => {
-    return { bottlenecks: [] };
+    const response = await api.get('/bottlenecks');
+    return Array.isArray(response.data) ? response.data : [];
   },
 
   // 시뮬레이션 파라미터 조회 (임시)
