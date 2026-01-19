@@ -406,13 +406,33 @@ const LogisticsRailSettingPage = () => {
   // zones 변경 시 DB에 저장
   const saveZonesToDB = async (updatedZones) => {
     try {
-      await apiService.setZonesBatch(updatedZones.map(z => ({
-        zone_id: z.id,
-        name: z.name,
-        lines: z.lines,
-        length: z.length,
-        sensors: z.sensors
-      })));
+      for (const zone of updatedZones) {
+        // 1단계: 존 저장
+        console.log('존 저장 시작:', zone.id);
+        await apiService.createZone({
+          zone_id: zone.id,
+          name: zone.name,
+          lines: zone.lines,
+          length: zone.length,
+          sensors: zone.sensors
+        });
+        console.log('존 저장 완료:', zone.id);
+
+        // 2단계: 라인 생성 (존이 저장된 후)
+        const lines = [];
+        for (let i = 0; i < zone.lines; i++) {
+          lines.push({
+            zone_id: zone.id,
+            line_id: String.fromCharCode(65 + i), // A, B, C, D...
+            length: zone.length,
+            sensors: Math.floor(zone.sensors / zone.lines)
+          });
+        }
+        console.log('라인 저장 시작:', lines);
+        // 라인 저장
+        await apiService.createLines(lines);
+        console.log('라인 저장 완료:', zone.id);
+      }
     } catch (error) {
       console.error('zones 저장 실패:', error);
     }

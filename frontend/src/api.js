@@ -47,9 +47,21 @@ export const apiService = {
     return response.data;
   },
 
-  // zone 추가
+  // zone 추가 (구엔드포인트 - 호환성)
   createZone: async (zone) => {
     const response = await api.post('/zones/config', zone);
+    return response.data;
+  },
+
+  // 존 생성 (신규 엔드포인트)
+  createZone: async (zone) => {
+    const response = await api.post('/zones', zone);
+    return response.data;
+  },
+
+  // 라인 저장 (신규)
+  createLines: async (lines) => {
+    const response = await api.post('/lines', lines);
     return response.data;
   },
 

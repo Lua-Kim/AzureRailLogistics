@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import styled, { keyframes, css, ThemeProvider } from 'styled-components';
 import { BrowserRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { 
-  Layout, Database, Activity, Box, Server, Sun, Moon, Laptop
+  Layout, Database, Activity, Box, Server, Sun, Moon, Laptop, Truck
 } from 'lucide-react';
 
 // Custom Components
@@ -12,7 +12,7 @@ import ZoneAnalyticsPage from './ZoneAnalyticsPage';
 import DashboardPage from './DashboardPage';
 import LogisticsRailSettingPage from './LogisticsRailSettingPage'; 
 import DataSettingPage from './DataSettingPage';
-import BasketPoolPage from './BasketPoolPage';
+import LogisticsBasketPage from './LogisticsBasketPage';
 
 // Styles
 import { lightTheme, darkTheme } from './theme';
@@ -212,6 +212,7 @@ const AppContent = ({ themeMode, toggleTheme }) => {
           {/* 내비게이션 버튼들 */}
           <StyledNavLink to="/dashboard"><Layout size={24}/></StyledNavLink>
           <StyledNavLink to="/zone_analytics"><Activity size={24}/></StyledNavLink>
+          <StyledNavLink to="/baskets"><Truck size={24}/></StyledNavLink>
           <StyledNavLink to="/logistis_rail_setting"><Box size={24}/></StyledNavLink>
           <StyledNavLink to="/logistis_management"><Server size={24}/></StyledNavLink>
           <StyledNavLink to="/data_setting"><Database size={24}/></StyledNavLink>
@@ -242,7 +243,7 @@ const AppContent = ({ themeMode, toggleTheme }) => {
             <Route path="/logistis_rail_setting" element={<LogisticsRailSettingPage />} />
             <Route path="/logistis_management" element={<LogisticsManagementPage />} />
             <Route path="/data_setting" element={<DataSettingPage />} />
-            <Route path="/baskets" element={<BasketPoolPage />} />
+            <Route path="/baskets" element={<LogisticsBasketPage />} />
           </Routes>
         </MainContent>
       </Container>

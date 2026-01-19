@@ -2,8 +2,8 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from kafka_consumer import SensorEventConsumer
-from database import init_db, get_db
-from models import LogisticsZone
+from database import init_data_db, data_db, logis_data_db
+from models import LogisticsZone, LogisticsLine
 from schemas import LogisticsZoneCreate, LogisticsZone as LogisticsZoneSchema
 from typing import List
 import sys
@@ -33,7 +33,7 @@ basket_pool = BasketPool(pool_size=100)
 @app.on_event("startup")
 async def startup_event():
     """서버 시작 시 Kafka Consumer 시작"""
-    init_db()  # 데이터베이스 초기화
+    init_data_db()  # 데이터베이스 초기화
     consumer.start()
     print("Backend 서버 시작 완료")
 
@@ -184,67 +184,74 @@ async def get_sensor_history(zone_id: str = None, count: int = 100):
 
 # ============ ZONES 설정 API ============
 
+@app.post("/zones")
+async def create_zone(zone: LogisticsZoneCreate, db: Session = Depends(data_db)):
+    """새 존 생성 (존 정보만, 라인은 별도로)"""
+    return logis_data_db.save_zone(db, zone)
+
+@app.post("/lines")
+async def create_lines(lines: List[dict], db: Session = Depends(data_db)):
+    """라인 저장 (배치)"""
+    return logis_data_db.save_lines(db, lines)
+
 @app.get("/zones/config", response_model=List[LogisticsZoneSchema])
-async def get_zones_config(db: Session = Depends(get_db)):
+async def get_zones_config(db: Session = Depends(data_db)):
     """현재 zones 설정 조회"""
-    zones = db.query(LogisticsZone).all()
+    zones = logis_data_db.get_all_zones(db)
     return zones
 
 @app.post("/zones/config", response_model=LogisticsZoneSchema)
-async def create_zone(zone: LogisticsZoneCreate, db: Session = Depends(get_db)):
-    """새 zone 추가"""
-    db_zone = LogisticsZone(**zone.dict())
-    db.add(db_zone)
-    db.commit()
-    db.refresh(db_zone)
-    return db_zone
+async def create_zone(zone: LogisticsZoneCreate, db: Session = Depends(data_db)):
+    """새 zone 추가 (라인도 자동 생성)"""
+    return logis_data_db.save_zone_with_lines(db, zone)
 
 @app.put("/zones/config/{zone_id}", response_model=LogisticsZoneSchema)
-async def update_zone(zone_id: str, zone: LogisticsZoneCreate, db: Session = Depends(get_db)):
+async def update_zone(zone_id: str, zone: LogisticsZoneCreate, db: Session = Depends(data_db)):
     """zone 업데이트"""
-    db_zone = db.query(LogisticsZone).filter(LogisticsZone.zone_id == zone_id).first()
+    db_zone = logis_data_db.update_zone_data(db, zone_id, zone)
     if not db_zone:
         return {"error": "Zone not found"}
-    
-    for key, value in zone.dict().items():
-        setattr(db_zone, key, value)
-    db.commit()
-    db.refresh(db_zone)
     return db_zone
 
 @app.delete("/zones/config/{zone_id}")
-async def delete_zone(zone_id: str, db: Session = Depends(get_db)):
+async def delete_zone(zone_id: str, db: Session = Depends(data_db)):
     """zone 삭제"""
-    db_zone = db.query(LogisticsZone).filter(LogisticsZone.zone_id == zone_id).first()
-    if not db_zone:
+    result = logis_data_db.delete_zone_data(db, zone_id)
+    if not result:
         return {"error": "Zone not found"}
-    
-    db.delete(db_zone)
-    db.commit()
-    return {"deleted": zone_id}
+    return {"deleted": result}
 
 @app.post("/zones/config/batch")
-async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = Depends(get_db)):
+async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = Depends(data_db)):
     """zones 전체 설정 (기존 데이터 전부 교체)"""
-    # 기존 데이터 삭제
-    db.query(LogisticsZone).delete()
-    
-    # 새 데이터 추가
-    for zone in zones_list:
-        db_zone = LogisticsZone(**zone.dict())
-        db.add(db_zone)
-    
-    db.commit()
-    result = db.query(LogisticsZone).all()
+    result = logis_data_db.save_batch_zones(db, zones_list)
     return result
 
 @app.get("/baskets")
-async def get_all_baskets():
-    """전체 바스켓 조회"""
+async def get_all_baskets(db: Session = Depends(data_db)):
+    """전체 바스켓 조회 (라인 길이 정보 포함)"""
     baskets = basket_pool.get_all_baskets()
+    
+    # 각 바스켓에 라인 길이 정보 추가
+    enriched_baskets = []
+    for basket in baskets.values():
+        basket_copy = basket.copy()
+        
+        # 존이 할당된 경우 DB에서 라인 길이 조회
+        if basket_copy["zone_id"]:
+            zone = db.query(LogisticsZone).filter(LogisticsZone.zone_id == basket_copy["zone_id"]).first()
+            if zone:
+                basket_copy["line_length"] = zone.length
+        
+        enriched_baskets.append(basket_copy)
+    
+    # 통계 정보 계산
+    stats = basket_pool.get_statistics()
+    
     return {
-        "count": len(baskets),
-        "baskets": list(baskets.values())
+        "count": len(enriched_baskets),
+        "baskets": enriched_baskets,
+        "statistics": stats
     }
 
 @app.get("/baskets/{basket_id}")
