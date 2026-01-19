@@ -20,7 +20,7 @@ class SensorEventConsumer:
             self.topic,
             bootstrap_servers=self.bootstrap_servers,
             value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-            auto_offset_reset='earliest',  # 가능한 한 과거부터 읽어 그래프 데이터 확보
+            auto_offset_reset='latest',  # 최신 메시지부터 읽음
             enable_auto_commit=True
         )
         

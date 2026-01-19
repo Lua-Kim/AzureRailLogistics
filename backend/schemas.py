@@ -70,3 +70,17 @@ class BasketsResponse(BaseModel):
     count: int
     baskets: List[Basket]
     statistics: dict
+
+class BasketCreateRequest(BaseModel):
+    """바스켓 생성 요청"""
+    zone_id: str              # IB-01
+    line_id: str              # IB-01-001
+    count: int                # 생성할 바스켓 수
+    destination: Optional[str] = None  # 목적지 (선택사항)
+
+class BasketCreateResponse(BaseModel):
+    """바스켓 생성 응답"""
+    success: bool
+    created_count: int
+    baskets: List[Basket]
+    message: str

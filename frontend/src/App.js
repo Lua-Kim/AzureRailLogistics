@@ -13,6 +13,8 @@ import DashboardPage from './DashboardPage';
 import LogisticsRailSettingPage from './LogisticsRailSettingPage'; 
 import DataSettingPage from './DataSettingPage';
 import LogisticsBasketPage from './LogisticsBasketPage';
+import EnhancedRealtimeMonitoringPage from './EnhancedRealtimeMonitoringPage';
+import BasketVisualizationPage from './BasketVisualizationPage';
 
 // Styles
 import { lightTheme, darkTheme } from './theme';
@@ -259,12 +261,14 @@ const AppContent = ({ themeMode, toggleTheme }) => {
         <Sidebar>
           
           {/* 내비게이션 버튼들 */}
-          <StyledNavLink to="/dashboard"><Layout size={24}/></StyledNavLink>
-          <StyledNavLink to="/zone_analytics"><Activity size={24}/></StyledNavLink>
-          <StyledNavLink to="/baskets"><Truck size={24}/></StyledNavLink>
-          <StyledNavLink to="/logistis_rail_setting"><Box size={24}/></StyledNavLink>
-          <StyledNavLink to="/logistis_management"><Server size={24}/></StyledNavLink>
-          <StyledNavLink to="/data_setting"><Database size={24}/></StyledNavLink>
+          <StyledNavLink to="/dashboard" title="대시보드"><Layout size={24}/></StyledNavLink>
+          <StyledNavLink to="/monitoring" title="실시간 모니터링"><Activity size={24}/></StyledNavLink>
+          <StyledNavLink to="/visualization" title="바스켓 시각화"><Truck size={24}/></StyledNavLink>
+          <StyledNavLink to="/zone_analytics" title="존 분석"><Activity size={24}/></StyledNavLink>
+          <StyledNavLink to="/baskets" title="바스켓 관리"><Truck size={24}/></StyledNavLink>
+          <StyledNavLink to="/logistis_rail_setting" title="레일 설정"><Box size={24}/></StyledNavLink>
+          <StyledNavLink to="/logistis_management" title="물류 관리"><Server size={24}/></StyledNavLink>
+          <StyledNavLink to="/data_setting" title="데이터 설정"><Database size={24}/></StyledNavLink>
 
           <ThemeToggleButton onClick={toggleTheme}>
             {renderThemeIcon()}
@@ -295,6 +299,8 @@ const AppContent = ({ themeMode, toggleTheme }) => {
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/monitoring" element={<EnhancedRealtimeMonitoringPage />} />
+            <Route path="/visualization" element={<BasketVisualizationPage />} />
             <Route path="/zone_analytics" element={<ZoneAnalyticsPage />} />
             <Route path="/logistis_rail_setting" element={<LogisticsRailSettingPage />} />
             <Route path="/logistis_management" element={<LogisticsManagementPage />} />

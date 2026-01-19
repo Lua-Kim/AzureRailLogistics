@@ -5,7 +5,23 @@ from datetime import datetime
 from enum import Enum
 from kafka import KafkaProducer
 import threading
-from database import get_db, ZoneDataDB
+
+import json
+import random
+import time
+from datetime import datetime
+from enum import Enum
+from kafka import KafkaProducer
+import threading
+
+# 센서_시뮬레이터의 database 모듈 import
+try:
+    from sensor_db import get_db, ZoneDataDB
+except ImportError:
+    # 백엔드에서 import되는 경우
+    from sensor_simulator.sensor_db import get_db, ZoneDataDB
+
+from basket_movement import BasketMovement
 
 # ZONES는 데이터베이스에서 동적으로 로드
 ZONES = []
@@ -18,15 +34,27 @@ class Direction(Enum):
 class SensorDataGenerator:
     """가상센서 데이터 생성 클래스"""
     
-    def __init__(self):
+    def __init__(self, basket_pool=None):
+        """
+        Args:
+            basket_pool: BasketPool 인스턴스 (선택사항)
+        """
         global ZONES
         if not ZONES:
             self._load_zones_from_db()
         self.zones = ZONES
-        self.is_running = True
+        self.is_running = False
         self.producer = None
         self.stream_thread = None
         self.lock = threading.Lock()
+        
+        # 바스켓 풀 및 이동 시뮬레이터
+        self.basket_pool = basket_pool
+        self.basket_movement = None
+        
+        # basket_pool이 제공되면 movement 시뮬레이터 초기화
+        if self.basket_pool:
+            self._initialize_basket_movement()
     
     def _load_zones_from_db(self):
         """데이터베이스에서 ZONES 설정 로드"""
@@ -63,6 +91,14 @@ class SensorDataGenerator:
             traceback.print_exc()
             raise
     
+    def _initialize_basket_movement(self):
+        """바스켓 이동 시뮬레이터 초기화"""
+        try:
+            self.basket_movement = BasketMovement(self.basket_pool, self.zones)
+            print("[센서 시뮬레이션] 바스켓 이동 시뮬레이터 준비 완료")
+        except Exception as e:
+            print(f"[센서 시뮬레이션] ⚠️ 바스켓 이동 시뮬레이터 초기화 실패: {e}")
+    
     def generate_sensor_id(self, zone_id: str, sensor_number: int) -> str:
         """센서 ID 생성"""
         zone_prefix = zone_id.replace("-", "")
@@ -91,28 +127,30 @@ class SensorDataGenerator:
         
         Args:
             zone_id: 구역 ID
-            sensor_info: 센서 정보
-            signal_probability: signal이 true일 확률 (0.0 ~ 1.0)
+            sensor_info: 센서 정보 {'sensor_id': '...', 'line_number': N}
+            signal_probability: 신호 발생 확률 (0.0 ~ 1.0)
             speed_percent: 속도 퍼센트 (0 ~ 100)
         """
         
-        # 이동 여부 결정
-        is_moving = random.random() < signal_probability
+        line_id = self.generate_line_id(zone_id, sensor_info["line_number"])
+        sensor_id = sensor_info["sensor_id"]
         
-        if is_moving:
-            signal = True
+        # 신호 확률 기반 신호 결정 (랜덤)
+        signal = random.random() < signal_probability
+        
+        # 신호에 따른 방향/속도 설정
+        if signal:
             direction = Direction.FORWARD.value
             max_speed = 100.0
             speed = round(max_speed * (speed_percent / 100), 2)
         else:
-            signal = False
             direction = Direction.STOP.value
             speed = 0.0
 
         event = {
             "zone_id": zone_id,
-            "line_id": self.generate_line_id(zone_id, sensor_info["line_number"]),
-            "sensor_id": sensor_info["sensor_id"],
+            "line_id": line_id,
+            "sensor_id": sensor_id,
             "signal": signal,
             "direction": direction,
             "speed": speed,
@@ -120,6 +158,82 @@ class SensorDataGenerator:
         }
         
         return event
+    
+    def _calculate_sensor_position(self, zone_id: str, sensor_info: dict) -> float:
+        """
+        센서의 물리적 위치 계산
+        
+        1m 간격으로 배치되므로, 센서 번호에 따라 위치 결정
+        예: 1번 센서 → 1m, 2번 센서 → 2m, ..., 50번 센서 → 50m
+        
+        Args:
+            zone_id: 구역 ID
+            sensor_info: {'sensor_id': '...', 'line_number': N}
+        
+        Returns:
+            센서 위치 (m)
+        """
+        # sensor_id에서 센서 번호 추출
+        sensor_id = sensor_info["sensor_id"]
+        
+        # SENSOR-{ZONE}{NUMBER} 형식에서 NUMBER 추출
+        try:
+            sensor_number = int(sensor_id[-5:])  # 마지막 5자리
+            position = (sensor_number % 50) + 1  # 1~50 범위 (라인 길이 기본 50m)
+        except:
+            position = 1.0  # 기본값
+        
+        return float(position)
+    
+    def _check_basket_at_sensor(self, zone_id: str, line_id: str, sensor_position: float) -> bool:
+        """
+        센서 위치에 바스켓이 있는지 확인
+        
+        바스켓 조건:
+        - status = "in_transit"
+        - zone_id와 line_id가 일치
+        - 바스켓 위치(position_meters)가 센서 감지 범위 내
+        
+        감지 범위:
+        - 바스켓 너비: 50cm (0.5m)
+        - 센서가 위치 X에 있으면, X-0.25 ~ X+0.25 범위의 바스켓 감지
+        
+        Args:
+            zone_id: 구역 ID
+            line_id: 라인 ID
+            sensor_position: 센서 위치 (m)
+        
+        Returns:
+            바스켓 있음: True, 없음: False
+        """
+        # basket_movement가 없으면 바스켓 기반 신호 불가
+        if not self.basket_movement:
+            return False
+        
+        try:
+            # 해당 라인의 모든 이동 중인 바스켓 조회
+            all_positions = self.basket_movement.get_all_positions()
+            
+            # 센서 감지 범위
+            BASKET_WIDTH_CM = 0.5  # 50cm
+            detection_range = BASKET_WIDTH_CM / 2  # 양쪽 0.25m
+            
+            for basket_pos in all_positions:
+                # 라인 일치 확인
+                if (basket_pos["zone_id"] == zone_id and 
+                    basket_pos["line_id"] == line_id):
+                    
+                    basket_pos_meters = basket_pos["position_meters"]
+                    
+                    # 감지 범위 내인지 확인
+                    if abs(basket_pos_meters - sensor_position) <= detection_range:
+                        return True
+            
+            return False
+        
+        except Exception as e:
+            # 오류 발생 시 False 반환 (안전)
+            return False
     
     def generate_zone_events(self, zone_id: str, event_count: int = None) -> list:
         """특정 구역의 모든 센서 이벤트 생성"""
@@ -221,6 +335,11 @@ class SensorDataGenerator:
                 return False
             
             self.is_running = True
+            
+            # basket_movement 시작
+            if self.basket_movement:
+                self.basket_movement.start()
+            
             self.stream_thread = threading.Thread(
                 target=self._stream_worker,
                 args=(bootstrap_servers, topic, signal_probability, speed_percent),
@@ -236,6 +355,11 @@ class SensorDataGenerator:
                 return False
             
             self.is_running = False
+            
+            # basket_movement 중지
+            if self.basket_movement:
+                self.basket_movement.stop()
+            
             return True
 
 

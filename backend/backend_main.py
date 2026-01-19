@@ -4,7 +4,12 @@ from sqlalchemy.orm import Session
 from kafka_consumer import SensorEventConsumer
 from database import init_data_db, data_db, logis_data_db
 from models import LogisticsZone, LogisticsLine
-from schemas import LogisticsZoneCreate, LogisticsZone as LogisticsZoneSchema
+from schemas import (
+    LogisticsZoneCreate, 
+    LogisticsZone as LogisticsZoneSchema,
+    BasketCreateRequest,
+    BasketCreateResponse
+)
 from typing import List
 import sys
 import os
@@ -13,7 +18,7 @@ import threading
 # sensor_simulator 경로 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'sensor_simulator'))
 from basket_manager import BasketPool
-from sensor_data_generator import SensorDataGenerator
+from simple_sensor_generator import SimpleSensorDataGenerator
 
 app = FastAPI(title="Azure Rail Logistics Backend")
 
@@ -87,8 +92,8 @@ async def startup_event():
     finally:
         db.close()
     
-    # 센서 데이터 생성기 새로 생성
-    sensor_generator = SensorDataGenerator()
+    # 센서 데이터 생성기 새로 생성 (간단한 버전)
+    sensor_generator = SimpleSensorDataGenerator()
     
     # Kafka Consumer 시작
     consumer.start()
@@ -254,6 +259,12 @@ async def get_sensor_history(zone_id: str = None, count: int = 100):
 
 # ============ ZONES 설정 API ============
 
+@app.get("/zones")
+async def get_zones(db: Session = Depends(data_db)):
+    """모든 존 조회"""
+    zones = logis_data_db.get_all_zones(db)
+    return zones
+
 @app.post("/zones")
 async def create_zone(zone: LogisticsZoneCreate, db: Session = Depends(data_db)):
     """새 존 생성 (존 정보만, 라인은 별도로)"""
@@ -271,7 +282,7 @@ async def get_zones_config(db: Session = Depends(data_db)):
     return zones
 
 @app.post("/zones/config", response_model=LogisticsZoneSchema)
-async def create_zone(zone: LogisticsZoneCreate, db: Session = Depends(data_db)):
+async def create_zone_with_lines(zone: LogisticsZoneCreate, db: Session = Depends(data_db)):
     """새 zone 추가 (라인도 자동 생성)"""
     return logis_data_db.save_zone_with_lines(db, zone)
 
@@ -296,6 +307,90 @@ async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = D
     """zones 전체 설정 (기존 데이터 전부 교체)"""
     result = logis_data_db.save_batch_zones(db, zones_list)
     return result
+
+@app.post("/api/baskets/create")
+async def create_baskets(
+    request_data: "BasketCreateRequest",
+    db: Session = Depends(data_db)
+):
+    """
+    바스켓 생성 및 라인에 할당
+    
+    Args:
+        zone_id: 구역 ID (예: IB-01)
+        line_id: 라인 ID (예: IB-01-001)
+        count: 생성할 바스켓 수
+        destination: 목적지 (선택)
+    
+    Returns:
+        생성된 바스켓 목록
+    """
+    if basket_pool is None:
+        return {
+            "success": False,
+            "created_count": 0,
+            "baskets": [],
+            "message": "Basket pool not initialized"
+        }
+    
+    # zone_id와 line_id 검증
+    zone = db.query(LogisticsZone).filter(LogisticsZone.zone_id == request_data.zone_id).first()
+    if not zone:
+        return {
+            "success": False,
+            "created_count": 0,
+            "baskets": [],
+            "message": f"Zone '{request_data.zone_id}' not found"
+        }
+    
+    line = db.query(LogisticsLine).filter(
+        LogisticsLine.zone_id == request_data.zone_id,
+        LogisticsLine.line_id == request_data.line_id
+    ).first()
+    if not line:
+        return {
+            "success": False,
+            "created_count": 0,
+            "baskets": [],
+            "message": f"Line '{request_data.line_id}' in zone '{request_data.zone_id}' not found"
+        }
+    
+    # 사용 가능한 바스켓 조회
+    available_baskets = basket_pool.get_available_baskets()
+    
+    if len(available_baskets) < request_data.count:
+        return {
+            "success": False,
+            "created_count": 0,
+            "baskets": [],
+            "message": f"Not enough available baskets. Available: {len(available_baskets)}, Requested: {request_data.count}"
+        }
+    
+    # 바스켓 할당
+    created_baskets = []
+    for i in range(request_data.count):
+        basket = available_baskets[i]
+        basket_id = basket["basket_id"]
+        
+        # assign_basket 호출: zone_id, line_id, destination 설정
+        destination = request_data.destination or request_data.zone_id
+        assigned_basket = basket_pool.assign_basket(
+            basket_id,
+            request_data.zone_id,
+            request_data.line_id,
+            destination
+        )
+        
+        if assigned_basket:
+            created_baskets.append(assigned_basket)
+            print(f"[바스켓 생성] {basket_id} assigned to {request_data.zone_id}-{request_data.line_id} → {destination}")
+    
+    return {
+        "success": True,
+        "created_count": len(created_baskets),
+        "baskets": created_baskets,
+        "message": f"Successfully created {len(created_baskets)} baskets"
+    }
 
 @app.get("/baskets")
 async def get_all_baskets(db: Session = Depends(data_db)):
