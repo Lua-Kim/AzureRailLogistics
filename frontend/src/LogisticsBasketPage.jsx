@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import styled from 'styled-components';
 import axios from 'axios';
 import { Filter } from 'lucide-react';
@@ -348,9 +348,24 @@ const TableContainer = styled.div`
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
   overflow-x: auto;
   border: 1px solid ${props => props.theme.colors.border};
+  position: relative;
 `;
 
-const Table = styled.table`
+const LoadingOverlay = styled.div`
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.3);
+  display: ${props => props.show ? 'flex' : 'none'};
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  z-index: 10;
+`;
+
+const LogisBasketStatusTable = styled.table`
   width: 100%;
   border-collapse: collapse;
   
@@ -434,8 +449,6 @@ const BasketPoolPage = () => {
   const [defaultZone, setDefaultZone] = useState('all');
   const [defaultLine, setDefaultLine] = useState('');
   const [poolSize, setPoolSize] = useState(100);
-
-  // zones 데이터 조회
   useEffect(() => {
     const fetchZones = async () => {
       try {
@@ -473,8 +486,18 @@ const BasketPoolPage = () => {
     };
   }, [autoRefresh, refreshInterval]);
 
+  // baskets과 statusFilter이 변경될 때만 filteredBaskets 업데이트
   useEffect(() => {
-    filterBaskets();
+    const newFiltered = statusFilter === 'all' 
+      ? baskets 
+      : baskets.filter(b => b.status === statusFilter);
+    
+    setFilteredBaskets(prevFiltered => {
+      // 필터 결과의 JSON 비교를 통해 실제 변경 감지
+      const isChanged = JSON.stringify(prevFiltered) !== JSON.stringify(newFiltered);
+      console.log('[filterBaskets] 변경 감지:', isChanged, 'baskets count:', newFiltered.length);
+      return isChanged ? newFiltered : prevFiltered;
+    });
   }, [baskets, statusFilter]);
 
   const fetchBaskets = async () => {
@@ -483,22 +506,25 @@ const BasketPoolPage = () => {
       const response = await axios.get('http://localhost:8000/baskets');
       const { baskets: basketList, statistics: stats } = response.data;
       
-      setBaskets(basketList);
-      setStatistics(stats);
+      // 데이터 변경 감지: 실제로 변경되었을 때만 상태 업데이트
+      setBaskets(prevBaskets => {
+        const isChanged = JSON.stringify(prevBaskets) !== JSON.stringify(basketList);
+        console.log('[fetchBaskets] baskets 변경:', isChanged);
+        return isChanged ? basketList : prevBaskets;
+      });
+      
+      setStatistics(prevStats => {
+        const isChanged = JSON.stringify(prevStats) !== JSON.stringify(stats);
+        console.log('[fetchBaskets] statistics 변경:', isChanged);
+        return isChanged ? stats : prevStats;
+      });
+      
       setError(null);
     } catch (err) {
       console.error('Failed to fetch baskets:', err);
       setError('바스켓 데이터를 가져오는데 실패했습니다.');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const filterBaskets = () => {
-    if (statusFilter === 'all') {
-      setFilteredBaskets(baskets);
-    } else {
-      setFilteredBaskets(baskets.filter(b => b.status === statusFilter));
     }
   };
 
@@ -537,6 +563,9 @@ const BasketPoolPage = () => {
     if (!timestamp) return '-';
     return new Date(timestamp).toLocaleString('ko-KR');
   };
+
+  // useMemo를 사용해 filteredBaskets이 실제로 변경되지 않으면 같은 참조 유지
+  const memoizedBaskets = useMemo(() => filteredBaskets, [filteredBaskets]);
 
   return (
     <PageContainer>
@@ -587,45 +616,45 @@ const BasketPoolPage = () => {
         </ControlPanel>
 
         <TableContainer>
-          {loading && <LoadingText>Loading baskets...</LoadingText>}
+          <LoadingOverlay show={loading}>
+            <LoadingText>Loading baskets...</LoadingText>
+          </LoadingOverlay>
           {error && <ErrorText>{error}</ErrorText>}
           
-          {!loading && !error && (
-            <Table>
-              <thead>
-                <tr>
-                  <th>No.</th>
-                  <th>Basket ID</th>
-                  <th>Zone</th>
-                  <th>Line</th>
-                  <th>Line Length (m)</th>
-                  <th>Destination</th>
-                  <th>Status</th>
-                  <th>Assigned At</th>
-                  <th>Updated At</th>
+          <LogisBasketStatusTable>
+            <thead>
+              <tr>
+                <th>No.</th>
+                <th>Basket ID</th>
+                <th>Zone</th>
+                <th>Line</th>
+                <th>Line Length (m)</th>
+                <th>Destination</th>
+                <th>Status</th>
+                <th>Assigned At</th>
+                <th>Updated At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {memoizedBaskets.map((basket, index) => (
+                <tr key={basket.basket_id}>
+                  <td>{index + 1}</td>
+                  <td>{basket.basket_id}</td>
+                  <td>{basket.zone_id || '-'}</td>
+                  <td>{basket.line_id || '-'}</td>
+                  <td>{basket.line_length ? Math.floor(basket.line_length) : '-'}</td>
+                  <td>{basket.destination || '-'}</td>
+                  <td>
+                    <StatusBadge status={basket.status}>
+                      {getStatusText(basket.status)}
+                    </StatusBadge>
+                  </td>
+                  <td>{formatTimestamp(basket.assigned_at)}</td>
+                  <td>{formatTimestamp(basket.updated_at)}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {filteredBaskets.map((basket, index) => (
-                  <tr key={basket.basket_id}>
-                    <td>{index + 1}</td>
-                    <td>{basket.basket_id}</td>
-                    <td>{basket.zone_id || '-'}</td>
-                    <td>{basket.line_id || '-'}</td>
-                    <td>{basket.line_length ? Math.floor(basket.line_length) : '-'}</td>
-                    <td>{basket.destination || '-'}</td>
-                    <td>
-                      <StatusBadge status={basket.status}>
-                        {getStatusText(basket.status)}
-                      </StatusBadge>
-                    </td>
-                    <td>{formatTimestamp(basket.assigned_at)}</td>
-                    <td>{formatTimestamp(basket.updated_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          )}
+              ))}
+            </tbody>
+          </LogisBasketStatusTable>
         </TableContainer>
       </MainContent>
 

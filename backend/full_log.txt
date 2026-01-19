@@ -1,0 +1,187 @@
+C:\Users\EL0100\Desktop\AzureRailLogistics\backend\backend_main.py:76: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("startup")
+C:\Users\EL0100\Desktop\AzureRailLogistics\backend\backend_main.py:101: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("shutdown")
+INFO:     Started server process [27596]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+Basket Pool 초기화 완료: 200개 바스켓
+Kafka Consumer 시작: localhost:9092, Topic: sensor-events
+센서 시뮬레이션이 시작되었습니다
+Backend 서버 시작 완료, 센서 시뮬레이션 실행 중
+Kafka 연결됨: localhost:9092
+Topic: sensor-events
+Signal 확률: 60%
+속도: 50.0% (최대 100.0 %)
+센서 데이터 스트리밍 시작...
+
+총 센서: 840개
+
+[21:55:37] 840개 이벤트 전송
+[21:55:38] 840개 이벤트 전송
+[21:55:39] 840개 이벤트 전송
+[21:55:40] 840개 이벤트 전송
+[21:55:41] 840개 이벤트 전송
+[21:55:42] 840개 이벤트 전송
+[21:55:43] 840개 이벤트 전송
+[21:55:44] 840개 이벤트 전송
+[21:55:45] 840개 이벤트 전송
+[21:55:46] 840개 이벤트 전송
+[21:55:48] 840개 이벤트 전송
+[21:55:49] 840개 이벤트 전송
+[21:55:50] 840개 이벤트 전송
+[21:55:51] 840개 이벤트 전송
+
+>>> 요청: GET /simulator/status
+
+>>> 요청: GET /zones/summary
+
+>>> 요청: GET /bottlenecks
+
+>>> 요청: GET /zones/config
+INFO:     127.0.0.1:51200 - "GET /simulator/status HTTP/1.1" 500 Internal Server Error
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\base.py", line 78, in call_next
+    message = await recv_stream.receive()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\anyio\streams\memory.py", line 98, in receive
+    return self.receive_nowait()
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\anyio\streams\memory.py", line 91, in receive_nowait
+    raise EndOfStream
+anyio.EndOfStream
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\uvicorn\protocols\http\h11_impl.py", line 408, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 84, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\applications.py", line 1106, in __call__
+    await super().__call__(scope, receive, send)
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\applications.py", line 122, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\errors.py", line 184, in __call__
+    raise exc
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\errors.py", line 162, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\cors.py", line 91, in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\cors.py", line 146, in simple_response
+    await self.app(scope, receive, send)
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\base.py", line 108, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\EL0100\Desktop\AzureRailLogistics\backend\backend_main.py", line 25, in log_requests
+    response = await call_next(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\base.py", line 84, in call_next
+    raise app_exc
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\base.py", line 70, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\exceptions.py", line 79, in __call__
+    raise exc
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\exceptions.py", line 68, in __call__
+    await self.app(scope, receive, sender)
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 20, in __call__
+    raise e
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 17, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\routing.py", line 718, in __call__
+    await route.handle(scope, receive, send)
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\routing.py", line 276, in handle
+    await self.app(scope, receive, send)
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\routing.py", line 66, in app
+    response = await func(request)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\routing.py", line 274, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\EL0100\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\routing.py", line 191, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\EL0100\Desktop\AzureRailLogistics\backend\backend_main.py", line 417, in get_simulator_status
+    "latest_event_time": consumer.get_latest_event_time() if consumer.latest_events else None
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SensorEventConsumer' object has no attribute 'get_latest_event_time'
+<<< 응답: 200
+INFO:     127.0.0.1:62708 - "GET /zones/summary HTTP/1.1" 200 OK
+<<< 응답: 200
+INFO:     127.0.0.1:54210 - "GET /bottlenecks HTTP/1.1" 200 OK
+<<< 응답: 200
+INFO:     127.0.0.1:62789 - "GET /zones/config HTTP/1.1" 200 OK
+
+>>> 요청: GET /zones/summary
+
+>>> 요청: GET /bottlenecks
+
+>>> 요청: GET /zones/config
+<<< 응답: 200
+<<< 응답: 200
+INFO:     127.0.0.1:62789 - "GET /zones/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54210 - "GET /bottlenecks HTTP/1.1" 200 OK
+<<< 응답: 200
+INFO:     127.0.0.1:62708 - "GET /zones/config HTTP/1.1" 200 OK
+
+>>> 요청: GET /zones/summary
+
+>>> 요청: GET /bottlenecks
+
+>>> 요청: GET /zones/config
+<<< 응답: 200
+<<< 응답: 200
+INFO:     127.0.0.1:62708 - "GET /zones/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54210 - "GET /bottlenecks HTTP/1.1" 200 OK
+<<< 응답: 200
+INFO:     127.0.0.1:62789 - "GET /zones/config HTTP/1.1" 200 OK
+
+>>> 요청: GET /bottlenecks
+
+>>> 요청: GET /zones/config
+
+>>> 요청: GET /zones/summary
+<<< 응답: 200
+INFO:     127.0.0.1:54210 - "GET /bottlenecks HTTP/1.1" 200 OK
+<<< 응답: 200
+INFO:     127.0.0.1:62789 - "GET /zones/summary HTTP/1.1" 200 OK
+<<< 응답: 200
+INFO:     127.0.0.1:62708 - "GET /zones/config HTTP/1.1" 200 OK
+
+>>> 요청: GET /zones/summary
+
+>>> 요청: GET /bottlenecks
+
+>>> 요청: GET /zones/config
+<<< 응답: 200
+<<< 응답: 200
+INFO:     127.0.0.1:62708 - "GET /zones/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62789 - "GET /bottlenecks HTTP/1.1" 200 OK
+<<< 응답: 200
+INFO:     127.0.0.1:54210 - "GET /zones/config HTTP/1.1" 200 OK
+
+>>> 요청: GET /zones/summary
+<<< 응답: 200
+INFO:     127.0.0.1:54210 - "GET /zones/summary HTTP/1.1" 200 OK
+
+>>> 요청: GET /bottlenecks
+
+>>> 요청: GET /zones/config
+<<< 응답: 200
+INFO:     127.0.0.1:62789 - "GET /bottlenecks HTTP/1.1" 200 OK
+<<< 응답: 200
+INFO:     127.0.0.1:62708 - "GET /zones/config HTTP/1.1" 200 OK

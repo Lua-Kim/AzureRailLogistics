@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from kafka_consumer import SensorEventConsumer
@@ -8,12 +8,23 @@ from schemas import LogisticsZoneCreate, LogisticsZone as LogisticsZoneSchema
 from typing import List
 import sys
 import os
+import threading
 
 # sensor_simulator 경로 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'sensor_simulator'))
 from basket_manager import BasketPool
+from sensor_data_generator import SensorDataGenerator
 
 app = FastAPI(title="Azure Rail Logistics Backend")
+
+# 모든 요청 로깅 미들웨어
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """모든 HTTP 요청 로깅"""
+    print(f"\n>>> 요청: {request.method} {request.url.path}")
+    response = await call_next(request)
+    print(f"<<< 응답: {response.status_code}")
+    return response
 
 # CORS 설정
 app.add_middleware(
@@ -27,20 +38,79 @@ app.add_middleware(
 # Kafka Consumer 인스턴스
 consumer = SensorEventConsumer()
 
-# Basket Pool 인스턴스
-basket_pool = BasketPool(pool_size=100)
+# 센서 데이터 생성기 인스턴스 (새로 생성)
+sensor_generator = None
+sensor_generator_thread = None
+
+# Basket Pool 인스턴스 (나중에 zones 설정으로 초기화)
+basket_pool = None
+
+# 센서 시뮬레이터 상태
+simulator_running = False
+
+def initialize_basket_pool(db: Session):
+    """zones 설정을 기반으로 바스켓 풀 초기화"""
+    global basket_pool
+    
+    zones = logis_data_db.get_all_zones(db)
+    
+    # zones-lines 설정 구성 (라인 길이 정보 포함)
+    zones_lines_config = []
+    for zone in zones:
+        zone_config = {
+            'zone_id': zone.zone_id,
+            'lines': [
+                {
+                    'line_id': line.line_id,
+                    'length': line.length if hasattr(line, 'length') else 0
+                }
+                for line in (zone.zone_lines if zone.zone_lines else [])
+            ]
+        }
+        zones_lines_config.append(zone_config)
+    
+    # BasketPool 초기화 (라인별로 랜덤 개수 배분, 라인 길이 제약 준수)
+    basket_pool = BasketPool(pool_size=200, zones_lines_config=zones_lines_config)
+    print(f"Basket Pool 초기화 완료: {len(basket_pool.get_all_baskets())}개 바스켓")
 
 @app.on_event("startup")
 async def startup_event():
     """서버 시작 시 Kafka Consumer 시작"""
+    global simulator_running, sensor_generator, sensor_generator_thread
+    
     init_data_db()  # 데이터베이스 초기화
+    
+    # BasketPool 초기화
+    db = next(data_db())
+    try:
+        initialize_basket_pool(db)
+    finally:
+        db.close()
+    
+    # 센서 데이터 생성기 새로 생성
+    sensor_generator = SensorDataGenerator()
+    
+    # Kafka Consumer 시작
     consumer.start()
-    print("Backend 서버 시작 완료")
+    
+    # 센서 시뮬레이션 자동 시작 (별도 스레드)
+    sensor_generator.start()
+    simulator_running = True
+    print("Backend 서버 시작 완료, 센서 시뮬레이션 실행 중")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """서버 종료 시 Kafka Consumer 중지"""
-    consumer.stop()
+    """서버 종료 시 Kafka Consumer와 센서 시뮬레이터 중지"""
+    try:
+        sensor_generator.stop()  # 센서 생성기 중지
+    except Exception as e:
+        print(f"센서 생성기 중지 오류: {e}")
+    
+    try:
+        consumer.stop()
+    except Exception as e:
+        print(f"컨슈머 중지 오류: {e}")
+    
     print("Backend 서버 종료")
 
 @app.get("/")
@@ -230,6 +300,13 @@ async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = D
 @app.get("/baskets")
 async def get_all_baskets(db: Session = Depends(data_db)):
     """전체 바스켓 조회 (라인 길이 정보 포함)"""
+    if basket_pool is None:
+        return {
+            "error": "Basket pool not initialized",
+            "baskets": [],
+            "statistics": {}
+        }
+    
     baskets = basket_pool.get_all_baskets()
     
     # 각 바스켓에 라인 길이 정보 추가
@@ -261,6 +338,84 @@ async def get_basket(basket_id: str):
     if basket:
         return basket
     return {"error": "Basket not found"}
+
+# ============ 센서 시뮬레이터 제어 API ============
+
+@app.post("/simulator/start")
+async def start_simulator():
+    """센서 시뮬레이션 시작 (Kafka로 센서 데이터 전송)"""
+    global simulator_running
+    
+    if simulator_running:
+        return {
+            "status": "already_running",
+            "message": "센서 시뮬레이션이 이미 실행 중입니다.",
+            "running": True
+        }
+    
+    try:
+        sensor_generator.start()
+        simulator_running = True
+        return {
+            "status": "started",
+            "message": "센서 시뮬레이션이 시작되었습니다.",
+            "running": True
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"시뮬레이션 시작 실패: {str(e)}",
+            "running": False
+        }
+
+@app.post("/simulator/stop")
+async def stop_simulator(request: Request):
+    """센서 시뮬레이션 중지 (Kafka로의 센서 데이터 전송 중지)"""
+    global simulator_running
+    
+    print(f"\n=== /simulator/stop API 호출 ===")
+    print(f"Method: {request.method}")
+    print(f"URL: {request.url}")
+    print(f"Client: {request.client}")
+    print(f"Headers: {dict(request.headers)}")
+    print(f"현재 simulator_running: {simulator_running}")
+    
+    if not simulator_running:
+        result = {
+            "status": "already_stopped",
+            "message": "센서 시뮬레이션이 이미 중지 상태입니다.",
+            "running": False
+        }
+        print(f"Result: {result}")
+        return result
+    
+    try:
+        sensor_generator.stop()
+        simulator_running = False
+        result = {
+            "status": "stopped",
+            "message": "센서 시뮬레이션이 중지되었습니다.",
+            "running": False
+        }
+        print(f"Result: {result}")
+        return result
+    except Exception as e:
+        result = {
+            "status": "error",
+            "message": f"시뮬레이션 중지 실패: {str(e)}",
+            "running": True
+        }
+        print(f"Result: {result}")
+        return result
+
+@app.get("/simulator/status")
+async def get_simulator_status():
+    """센서 시뮬레이션 상태 조회"""
+    return {
+        "running": simulator_running,
+        "events_received": consumer.get_event_count(),
+        "latest_event_time": consumer.get_latest_event_time() if consumer.latest_events else None
+    }
 
 if __name__ == "__main__":
     import uvicorn

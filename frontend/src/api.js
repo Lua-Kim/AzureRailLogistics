@@ -97,6 +97,39 @@ export const apiService = {
   // 시뮬레이션 파라미터 업데이트 (임시)
   updateSimulationParams: async (params) => {
     return { success: true, params };
+  },
+
+  // 센서 시뮬레이션 시작
+  startSimulation: async () => {
+    try {
+      const response = await api.post('/simulator/start');
+      return response.data;
+    } catch (error) {
+      console.error('시뮬레이션 시작 오류:', error);
+      throw error;
+    }
+  },
+
+  // 센서 시뮬레이션 중지
+  stopSimulation: async () => {
+    try {
+      const response = await api.post('/simulator/stop');
+      return response.data;
+    } catch (error) {
+      console.error('시뮬레이션 중지 오류:', error);
+      throw error;
+    }
+  },
+
+  // 센서 시뮬레이션 상태 조회
+  getSimulationStatus: async () => {
+    try {
+      const response = await api.get('/simulator/status');
+      return response.data;
+    } catch (error) {
+      console.error('시뮬레이션 상태 조회 오류:', error);
+      return { running: false };
+    }
   }
 };
 

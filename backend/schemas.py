@@ -40,3 +40,33 @@ class LogisticsZone(LogisticsZoneBase):
 class ZonesConfig(BaseModel):
     """전체 zones 설정"""
     zones: List[LogisticsZone]
+class BasketBase(BaseModel):
+    basket_id: str
+    zone_id: Optional[str] = None
+    line_id: Optional[str] = None
+    width_cm: float
+    destination: Optional[str] = None
+    status: str  # available, in_transit, arrived
+    assigned_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class BasketCreate(BasketBase):
+    pass
+
+class BasketUpdate(BaseModel):
+    zone_id: Optional[str] = None
+    line_id: Optional[str] = None
+    destination: Optional[str] = None
+    status: Optional[str] = None
+
+class Basket(BasketBase):
+    line_length: Optional[float] = None  # DB에서 추가되는 필드
+    
+    class Config:
+        from_attributes = True
+
+class BasketsResponse(BaseModel):
+    """바스켓 조회 응답"""
+    count: int
+    baskets: List[Basket]
+    statistics: dict

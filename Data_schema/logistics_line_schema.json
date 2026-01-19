@@ -1,0 +1,28 @@
+{
+  "description": "물류센터 라인 데이터 스키마",
+  "type": "object",
+  "properties": {
+    "zone_id": {
+      "type": "string",
+      "description": "구역 아이디",
+      "example": "MFC-PK"
+    },
+    "zone_name": {
+      "type": "string",
+      "description": "구역 이름",
+      "example": "픽킹"
+    },
+    "line_id": {
+      "type": "string",
+      "description": "물류 라인 아이디",
+      "example": "LINE-001"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "데이터 수집 시간",
+      "example": "2026-01-16T10:30:45.123Z"
+    }
+  },
+  "required": ["zone_id", "line_id", "timestamp"]
+}

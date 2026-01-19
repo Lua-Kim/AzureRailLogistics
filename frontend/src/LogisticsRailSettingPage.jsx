@@ -115,34 +115,45 @@ const ChartCard = styled.div`
   border: 1px solid ${props => props.theme.colors.border};
   border-radius: 12px;
   padding: 12px;
+  display: flex;
+  flex-direction: column;
 `;
 
 const ChartCardTitle = styled.h4`
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   color: ${props => props.theme.colors.text.muted};
-  margin-bottom: 12px;
+  margin: 0 0 8px 0;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  flex-shrink: 0;
 `;
 
 const BarChartContainer = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  padding-right: 4px;
 `;
 
 const BarRow = styled.div`
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
+  min-height: 20px;
 `;
 
 const BarLabel = styled.div`
-  min-width: 60px;
+  min-width: 70px;
+  max-width: 70px;
   font-size: 11px;
   font-weight: 700;
   color: ${props => props.theme.colors.text.sub};
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
 `;
 
 const BarTrack = styled.div`
@@ -333,26 +344,49 @@ const ValidationError = styled.div`
 // --- [Initial Data & Presets] ---
 const presets = {
   mfc: [
-    { id: 'MFC-PK', name: '도심 피킹', lines: 2, length: 20, sensors: 40 },
-    { id: 'MFC-SO', name: '패킹/출고', lines: 2, length: 15, sensors: 30 },
+    { id: 'MFC-PK', name: '도심 피킹', lines: 20, length: 300, sensors: 300 },
+    { id: 'MFC-SO', name: '패킹/출고', lines: 20, length: 200, sensors: 200 },
   ],
   tc: [
-    { id: 'TC-XD', name: '크로스도킹', lines: 4, length: 150, sensors: 200 },
+    { id: 'TC-XD', name: '크로스도킹', lines: 40, length: 1500, sensors: 1500 },
   ],
   dc: [
-    { id: 'DC-IB', name: '입고', lines: 4, length: 40, sensors: 50 },
-    { id: 'DC-ST', name: '보관', lines: 10, length: 80, sensors: 150 },
-    { id: 'DC-PK', name: '피킹', lines: 8, length: 60, sensors: 120 },
-    { id: 'DC-OB', name: '출고', lines: 4, length: 40, sensors: 50 },
+    { id: 'DC-IB', name: '입고', lines: 40, length: 800, sensors: 800 },
+    { id: 'DC-ST', name: '보관', lines: 100, length: 2000, sensors: 2000 },
+    { id: 'DC-PK', name: '피킹', lines: 80, length: 1500, sensors: 1500 },
+    { id: 'DC-OB', name: '출고', lines: 40, length: 800, sensors: 800 },
   ],
   megaFc: [
-    { id: 'IB-01', name: '입고', lines: 4, length: 50, sensors: 40 },
-    { id: 'IS-01', name: '검수', lines: 4, length: 30, sensors: 50 },
-    { id: 'ST-RC', name: '랙 보관', lines: 20, length: 120, sensors: 300 },
-    { id: 'PK-01', name: '피킹', lines: 12, length: 100, sensors: 200 },
-    { id: 'PC-01', name: '가공', lines: 3, length: 40, sensors: 50 },
-    { id: 'SR-01', name: '분류', lines: 8, length: 80, sensors: 160 },
-    { id: 'OB-01', name: '출고', lines: 4, length: 60, sensors: 40 },
+    { id: 'IB-01', name: '입고', lines: 40, length: 800, sensors: 800 },
+    { id: 'IS-01', name: '검수', lines: 40, length: 600, sensors: 600 },
+    { id: 'ST-RC', name: '랙 보관', lines: 200, length: 3000, sensors: 3000 },
+    { id: 'PK-01', name: '피킹', lines: 120, length: 2000, sensors: 2000 },
+    { id: 'PC-01', name: '가공', lines: 30, length: 1000, sensors: 1000 },
+    { id: 'SR-01', name: '분류', lines: 80, length: 1500, sensors: 1500 },
+    { id: 'OB-01', name: '출고', lines: 40, length: 1200, sensors: 1200 },
+  ],
+  superFc: [
+    { id: 'SFC-IB', name: '입고', lines: 60, length: 1000, sensors: 1000 },
+    { id: 'SFC-IS', name: '검수', lines: 60, length: 800, sensors: 800 },
+    { id: 'SFC-ST', name: '대형 랙 보관', lines: 400, length: 4000, sensors: 4000 },
+    { id: 'SFC-PK', name: '자동 피킹', lines: 200, length: 3000, sensors: 3000 },
+    { id: 'SFC-PC', name: '가공/재작업', lines: 50, length: 1500, sensors: 1500 },
+    { id: 'SFC-SR', name: '지능형 분류', lines: 150, length: 2000, sensors: 2000 },
+    { id: 'SFC-OB', name: '출고/배송', lines: 80, length: 2000, sensors: 2000 },
+    { id: 'SFC-RET', name: '반품 처리', lines: 40, length: 1000, sensors: 1000 },
+  ],
+  intlHub: [
+    { id: 'IH-IB', name: '국제 입고', lines: 100, length: 2000, sensors: 2000 },
+    { id: 'IH-CS', name: '통관/검사', lines: 80, length: 1500, sensors: 1500 },
+    { id: 'IH-SR', name: '국제 분류', lines: 200, length: 2500, sensors: 2500 },
+    { id: 'IH-EX', name: '수출 처리', lines: 120, length: 2000, sensors: 2000 },
+    { id: 'IH-OB', name: '국제 출고', lines: 80, length: 1500, sensors: 1500 },
+  ],
+  autoFc: [
+    { id: 'AF-SR', name: '자동 분류', lines: 300, length: 3000, sensors: 3000 },
+    { id: 'AF-PK', name: '로봇 피킹', lines: 250, length: 2500, sensors: 2500 },
+    { id: 'AF-RB', name: '로봇 팔 처리', lines: 100, length: 2000, sensors: 2000 },
+    { id: 'AF-OB', name: '자동 출고', lines: 150, length: 2000, sensors: 2000 },
   ]
 };
 
@@ -449,9 +483,14 @@ const LogisticsRailSettingPage = () => {
 
   // 그래프 데이터 계산
   const chartData = useMemo(() => {
+    if (zones.length === 0) return { linesData: [], sensorsData: [], lengthData: [], sensorsPerLine: [] };
+    
     const maxLines = Math.max(...zones.map(z => z.lines));
     const maxSensors = Math.max(...zones.map(z => z.sensors));
     const maxLength = Math.max(...zones.map(z => z.length));
+    const maxSensorsPerLine = Math.max(...zones.map(z => z.sensors / z.lines));
+    
+    console.log(`[chartData] zones: ${zones.length}개, lines: ${zones.map(z => z.lines).join(', ')}`);
     
     return {
       linesData: zones.map(z => ({
@@ -472,7 +511,7 @@ const LogisticsRailSettingPage = () => {
       sensorsPerLine: zones.map(z => ({
         label: z.id,
         value: (z.sensors / z.lines).toFixed(1),
-        percent: ((z.sensors / z.lines) / Math.max(...zones.map(zz => zz.sensors / zz.lines))) * 100
+        percent: ((z.sensors / z.lines) / maxSensorsPerLine) * 100
       }))
     };
   }, [zones]);
@@ -530,9 +569,66 @@ const LogisticsRailSettingPage = () => {
 
 
   const handlePresetClick = async (presetKey) => {
+    // 확인 다이얼로그
+    if (!window.confirm('물류센터 시설정보가 변경됩니다. 확인하시겠습니까?')) {
+      return;
+    }
+
     const newZones = presets[presetKey];
     setZones(newZones);
-    await saveZonesToDB(newZones);
+    
+    // 프리셋 로드 시: 기존 존은 UPDATE, 새로운 존은 INSERT
+    try {
+      // 현재 DB의 모든 존 가져오기
+      const currentData = await apiService.getZonesConfig();
+      const existingZoneIds = new Set(currentData?.map(z => z.zone_id) || []);
+      const newZoneIds = new Set(newZones.map(z => z.id));
+      
+      // 1단계: 새 프리셋의 존들 저장 (있으면 UPDATE, 없으면 INSERT)
+      for (const zone of newZones) {
+        const zoneData = {
+          zone_id: zone.id,
+          name: zone.name,
+          lines: zone.lines,
+          length: zone.length,
+          sensors: zone.sensors
+        };
+        
+        if (existingZoneIds.has(zone.id)) {
+          // 존재하면 UPDATE
+          console.log('존 업데이트:', zone.id);
+          await apiService.updateZone(zone.id, zoneData);
+        } else {
+          // 없으면 INSERT
+          console.log('존 생성:', zone.id);
+          await apiService.createZone(zoneData);
+        }
+
+        // 2단계: 라인 생성 (존 저장 후)
+        const lines = [];
+        for (let i = 0; i < zone.lines; i++) {
+          lines.push({
+            zone_id: zone.id,
+            line_id: String.fromCharCode(65 + i), // A, B, C, D...
+            length: zone.length,
+            sensors: Math.floor(zone.sensors / zone.lines)
+          });
+        }
+        await apiService.createLines(lines);
+      }
+      
+      // 2단계: 프리셋에 없는 기존 존 삭제
+      for (const existingId of existingZoneIds) {
+        if (!newZoneIds.has(existingId)) {
+          console.log('존 삭제:', existingId);
+          await apiService.deleteZone(existingId);
+        }
+      }
+      
+      console.log(`프리셋 '${presetKey}' 로드 완료`);
+    } catch (error) {
+      console.error('프리셋 로드 중 오류:', error);
+    }
   };
 
   return (
@@ -623,6 +719,9 @@ const LogisticsRailSettingPage = () => {
         <PresetButton onClick={() => handlePresetClick('tc')}>통과형 센터 (TC)</PresetButton>
         <PresetButton onClick={() => handlePresetClick('dc')}>광역 배송 센터 (DC)</PresetButton>
         <PresetButton onClick={() => handlePresetClick('megaFc')}>메가 풀필먼트 (FC)</PresetButton>
+        <PresetButton onClick={() => handlePresetClick('superFc')}>초대형 풀필먼트 (Super FC)</PresetButton>
+        <PresetButton onClick={() => handlePresetClick('intlHub')}>국제 물류 허브</PresetButton>
+        <PresetButton onClick={() => handlePresetClick('autoFc')}>자동화 물류센터</PresetButton>
       </PresetContainer>
 
       {error ? (

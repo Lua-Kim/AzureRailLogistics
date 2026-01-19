@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "센서 이벤트 스키마",
+  "description": "Kafka 토픽 'sensor-events'에 발행되는 센서 감지 이벤트",
+  "type": "object",
+  "required": ["zone_id", "line_id", "sensor_id", "signal", "direction", "speed", "timestamp"],
+  "properties": {
+    "zone_id": {
+      "type": "string",
+      "description": "구역 ID (예: IB-01, IS-01, ST-RC 등)",
+      "examples": ["IB-01", "IS-01", "ST-RC", "PK-01"]
+    },
+    "line_id": {
+      "type": "string",
+      "description": "라인 ID (zone_id-line_number 형식)",
+      "examples": ["IB-01-001", "IS-01-002", "ST-RC-005"]
+    },
+    "sensor_id": {
+      "type": "string",
+      "description": "센서 고유 ID",
+      "examples": ["SENSOR-IB0100001", "SENSOR-IS0100050", "SENSOR-STRC0300100"]
+    },
+    "signal": {
+      "type": "boolean",
+      "description": "센서 신호 활성화 여부 (컨베이어 이동 감지)",
+      "examples": [true, false]
+    },
+    "direction": {
+      "type": "string",
+      "enum": ["FORWARD", "STOP"],
+      "description": "이동 방향 (FORWARD: 정방향, STOP: 정지)"
+    },
+    "speed": {
+      "type": "number",
+      "description": "컨베이어 속도 (0-100, %)",
+      "minimum": 0,
+      "maximum": 100,
+      "examples": [0, 50.5, 100]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "이벤트 발생 시간 (ISO 8601 UTC)",
+      "examples": ["2026-01-19T12:34:56.789Z"]
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "zone_id": "IB-01",
+      "line_id": "IB-01-001",
+      "sensor_id": "SENSOR-IB0100001",
+      "signal": true,
+      "direction": "FORWARD",
+      "speed": 75.5,
+      "timestamp": "2026-01-19T12:34:56.123Z"
+    },
+    {
+      "zone_id": "ST-RC",
+      "line_id": "ST-RC-010",
+      "sensor_id": "SENSOR-STRC0300150",
+      "signal": false,
+      "direction": "STOP",
+      "speed": 0.0,
+      "timestamp": "2026-01-19T12:34:57.456Z"
+    }
+  ]
+}

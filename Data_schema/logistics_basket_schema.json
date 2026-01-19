@@ -1,4 +1,5 @@
 {
   "basket_id": "string",
+  "width_cm": "50cm",
   "destination": "string"
 }

@@ -1,10 +1,12 @@
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# .env 파일 로드
-load_dotenv()
+# .env 파일 로드 (프로젝트 루트에서)
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 # PostgreSQL 연결 설정 (환경 변수에서만 읽음)
 DATABASE_URL = os.getenv("DATABASE_URL")

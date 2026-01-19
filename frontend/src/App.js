@@ -163,7 +163,7 @@ const TitleText = styled.div`
 `;
 
 // 실시간 상태 표시기: 'PIPELINE: LIVE'와 같은 실시간 상태를 나타냅니다.
-const LiveIndicator = styled.div`
+const LiveIndicator = styled.button`
   background-color: ${props => props.theme.colors.surface};
   padding: 12px 24px;
   border-radius: ${props => props.theme.borderRadius};
@@ -175,14 +175,22 @@ const LiveIndicator = styled.div`
   font-weight: 900;
   letter-spacing: 0.1em;
   color: ${props => props.theme.colors.text.sub};
+  cursor: pointer;
+  transition: all 0.3s ease;
 
   &::before {
     content: '';
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background-color: ${props => props.theme.colors.status.live};
-    box-shadow: 0 0 10px ${props => props.theme.colors.status.live};
+    background-color: ${props => props.isActive ? props.theme.colors.status.live : '#888'};
+    box-shadow: 0 0 10px ${props => props.isActive ? props.theme.colors.status.live : 'transparent'};
+    transition: all 0.3s ease;
+  }
+
+  &:hover {
+    background-color: ${props => props.theme.colors.surfaceHighlight};
+    border-color: ${props => props.theme.colors.primary};
   }
 `;
 
@@ -192,6 +200,47 @@ const AppContent = ({ themeMode, toggleTheme }) => {
   const location = useLocation();
   const isDashboard = location.pathname === '/dashboard' || location.pathname === '/';
   const isCompact = !isDashboard;
+  const [simulationRunning, setSimulationRunning] = useState(false);
+  const [simulationLoading, setSimulationLoading] = useState(false);
+
+  // 시뮬레이션 상태 초기화
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const { apiService } = await import('./api');
+        const status = await apiService.getSimulationStatus();
+        setSimulationRunning(status.running || false);
+      } catch (error) {
+        console.error('시뮬레이션 상태 조회 실패:', error);
+      }
+    };
+    checkStatus();
+  }, []);
+
+  // 시뮬레이션 토글 핸들러
+  const handleSimulationToggle = async () => {
+    setSimulationLoading(true);
+    try {
+      const { apiService } = await import('./api');
+      
+      if (simulationRunning) {
+        // 시뮬레이션 중지
+        await apiService.stopSimulation();
+        console.log('센서 시뮬레이션 중지됨');
+        setSimulationRunning(false);
+      } else {
+        // 시뮬레이션 시작
+        await apiService.startSimulation();
+        console.log('센서 시뮬레이션 시작됨');
+        setSimulationRunning(true);
+      }
+    } catch (error) {
+      console.error('시뮬레이션 제어 오류:', error);
+      alert(`시뮬레이션 ${simulationRunning ? '중지' : '시작'} 실패: ${error.message}`);
+    } finally {
+      setSimulationLoading(false);
+    }
+  };
 
   const renderThemeIcon = () => {
     switch (themeMode) {
@@ -233,7 +282,14 @@ const AppContent = ({ themeMode, toggleTheme }) => {
                 <p>INTEGRATED OPERATIONAL TOPOLOGY HUB</p>
               </TitleText>
             </HeaderTitleGroup>
-            <LiveIndicator>PIPELINE: LIVE</LiveIndicator>
+            <LiveIndicator 
+              isActive={simulationRunning}
+              onClick={handleSimulationToggle}
+              disabled={simulationLoading}
+              title={simulationRunning ? '클릭하여 센서 시뮬레이션 중지' : '클릭하여 센서 시뮬레이션 시작'}
+            >
+              PIPELINE: {simulationRunning ? 'LIVE' : 'IDLE'}
+            </LiveIndicator>
           </Header>
 
           <Routes>

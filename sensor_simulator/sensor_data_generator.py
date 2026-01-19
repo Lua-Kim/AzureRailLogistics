@@ -4,17 +4,11 @@ import time
 from datetime import datetime
 from enum import Enum
 from kafka import KafkaProducer
+import threading
+from database import get_db, ZoneDataDB
 
-# 구역 설정 (메가FC 기준)
-ZONES = [
-    {"zone_id": "IB-01", "zone_name": "입고", "lines": 4, "length": 50, "sensors": 40},
-    {"zone_id": "IS-01", "zone_name": "검수", "lines": 4, "length": 30, "sensors": 50},
-    {"zone_id": "ST-RC", "zone_name": "랙 보관", "lines": 20, "length": 120, "sensors": 300},
-    {"zone_id": "PK-01", "zone_name": "피킹", "lines": 12, "length": 100, "sensors": 200},
-    {"zone_id": "PC-01", "zone_name": "가공", "lines": 3, "length": 40, "sensors": 50},
-    {"zone_id": "SR-01", "zone_name": "분류", "lines": 8, "length": 80, "sensors": 160},
-    {"zone_id": "OB-01", "zone_name": "출고", "lines": 4, "length": 60, "sensors": 40},
-]
+# ZONES는 데이터베이스에서 동적으로 로드
+ZONES = []
 
 class Direction(Enum):
     FORWARD = "FORWARD"
@@ -25,7 +19,49 @@ class SensorDataGenerator:
     """가상센서 데이터 생성 클래스"""
     
     def __init__(self):
+        global ZONES
+        if not ZONES:
+            self._load_zones_from_db()
         self.zones = ZONES
+        self.is_running = True
+        self.producer = None
+        self.stream_thread = None
+        self.lock = threading.Lock()
+    
+    def _load_zones_from_db(self):
+        """데이터베이스에서 ZONES 설정 로드"""
+        global ZONES
+        try:
+            db = next(get_db())
+            zones_config = ZoneDataDB.get_zones_config_for_sensor(db)
+            
+            print(f"[센서 시뮬레이션] ========== DB에서 존 정보 로드 ==========")
+            print(f"[센서 시뮬레이션] 조회된 존: {len(zones_config)}개")
+            
+            # DB에서 가져온 데이터를 ZONES 포맷으로 변환
+            ZONES = []
+            total_sensors = 0
+            for zone in zones_config:
+                zone_data = {
+                    "zone_id": zone["zone_id"],
+                    "zone_name": zone["zone_name"],
+                    "lines": zone["lines"],
+                    "length": zone["length"],
+                    "sensors": zone["sensors"]
+                }
+                ZONES.append(zone_data)
+                total_sensors += zone["sensors"]
+                print(f"  ✓ {zone['zone_id']} ({zone['zone_name']})")
+                print(f"    - 라인: {zone['lines']}개, 길이: {zone['length']}m, 센서: {zone['sensors']}개")
+            
+            print(f"[센서 시뮬레이션] ========== 로드 완료 ==========")
+            print(f"[센서 시뮬레이션] 총 센서: {total_sensors}개")
+            
+        except Exception as e:
+            print(f"[센서 시뮬레이션] ❌ DB 로드 실패: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def generate_sensor_id(self, zone_id: str, sensor_number: int) -> str:
         """센서 ID 생성"""
@@ -125,29 +161,19 @@ class SensorDataGenerator:
         
         return batch
     
-    def stream_to_kafka(self, bootstrap_servers='localhost:9092', topic='sensor-events', signal_probability: float = 0.6, speed_percent: float = 50.0):
-        """Kafka로 센서 데이터 스트리밍
-        
-        Args:
-            bootstrap_servers: Kafka 부트스트랩 서버
-            topic: Kafka 토픽명
-            signal_probability: signal이 true일 확률 (0.0 ~ 1.0, 기본값: 0.6)
-            speed_percent: 속도 퍼센트 (0 ~ 100, 기본값: 50)
-        """
-        producer = KafkaProducer(
-            bootstrap_servers=bootstrap_servers,
-            value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode('utf-8')
-        )
-        
+    def _stream_worker(self, bootstrap_servers='localhost:9092', topic='sensor-events', signal_probability: float = 0.6, speed_percent: float = 50.0):
+        """실제 스트리밍을 수행하는 워커 스레드"""
         try:
-            print(f"Kafka 연결됨: {bootstrap_servers}")
-            print(f"Topic: {topic}")
-            print(f"Signal 확률: {signal_probability * 100:.0f}%")
-            print(f"속도: {speed_percent}% (최대 100.0 %)")
-            print("센서 데이터 스트리밍 시작...\n")
-            print(f"총 센서: {sum(z['sensors'] for z in self.zones)}개\n")
+            if not self.producer:
+                self.producer = KafkaProducer(
+                    bootstrap_servers=bootstrap_servers,
+                    value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode('utf-8')
+                )
             
-            while True:
+            print(f"[센서 시뮬레이션] Kafka 연결: {bootstrap_servers}, Topic: {topic}")
+            print(f"[센서 시뮬레이션] 총 센서: {sum(z['sensors'] for z in self.zones)}개")
+            
+            while self.is_running:
                 events_sent = 0
                 
                 # 모든 구역의 모든 센서에서 이벤트 생성
@@ -156,19 +182,61 @@ class SensorDataGenerator:
                     sensors = self.get_zone_sensors(zone_id)
                     
                     for sensor_info in sensors:
+                        if not self.is_running:
+                            break
+                        
                         event = self.generate_single_event(zone_id, sensor_info, signal_probability, speed_percent)
-                        producer.send(topic, event)
+                        self.producer.send(topic, event)
                         events_sent += 1
+                    
+                    if not self.is_running:
+                        break
                 
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] {events_sent}개 이벤트 전송")
-                
-                # 1초 대기
-                time.sleep(1)
-                
-        except KeyboardInterrupt:
-            print("\n스트리밍 중지")
+                if self.is_running:
+                    time.sleep(1)
+                    
+        except Exception as e:
+            print(f"[센서 시뮬레이션 오류] {e}")
         finally:
-            producer.close()
+            if self.producer:
+                self.producer.flush()
+            self.is_running = False
+            print("[센서 시뮬레이션] 스트리밍 종료")
+    
+    def stream_to_kafka(self, bootstrap_servers='localhost:9092', topic='sensor-events', signal_probability: float = 0.6, speed_percent: float = 50.0):
+        """Kafka로 센서 데이터 스트리밍 (메인 스레드에서 호출)
+        
+        Args:
+            bootstrap_servers: Kafka 부트스트랩 서버
+            topic: Kafka 토픽명
+            signal_probability: signal이 true일 확률 (0.0 ~ 1.0, 기본값: 0.6)
+            speed_percent: 속도 퍼센트 (0 ~ 100, 기본값: 50)
+        """
+        self._stream_worker(bootstrap_servers, topic, signal_probability, speed_percent)
+    
+    def start(self, bootstrap_servers='localhost:9092', topic='sensor-events', signal_probability: float = 0.6, speed_percent: float = 50.0):
+        """스트리밍 시작 (별도 스레드에서)"""
+        with self.lock:
+            if self.is_running:
+                return False
+            
+            self.is_running = True
+            self.stream_thread = threading.Thread(
+                target=self._stream_worker,
+                args=(bootstrap_servers, topic, signal_probability, speed_percent),
+                daemon=True
+            )
+            self.stream_thread.start()
+            return True
+    
+    def stop(self):
+        """스트리밍 중지"""
+        with self.lock:
+            if not self.is_running:
+                return False
+            
+            self.is_running = False
+            return True
 
 
 # 테스트
