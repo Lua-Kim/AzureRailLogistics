@@ -12,6 +12,7 @@ import ZoneAnalyticsPage from './ZoneAnalyticsPage';
 import DashboardPage from './DashboardPage';
 import LogisticsRailSettingPage from './LogisticsRailSettingPage'; 
 import DataSettingPage from './DataSettingPage';
+import BasketPoolPage from './BasketPoolPage';
 
 // Styles
 import { lightTheme, darkTheme } from './theme';
@@ -241,6 +242,7 @@ const AppContent = ({ themeMode, toggleTheme }) => {
             <Route path="/logistis_rail_setting" element={<LogisticsRailSettingPage />} />
             <Route path="/logistis_management" element={<LogisticsManagementPage />} />
             <Route path="/data_setting" element={<DataSettingPage />} />
+            <Route path="/baskets" element={<BasketPoolPage />} />
           </Routes>
         </MainContent>
       </Container>
