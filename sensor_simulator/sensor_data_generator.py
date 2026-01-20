@@ -43,7 +43,7 @@ class SensorDataGenerator:
         if not ZONES:
             self._load_zones_from_db()
         self.zones = ZONES
-        self.is_running = False
+        self.is_running = True
         self.producer = None
         self.stream_thread = None
         self.lock = threading.Lock()
@@ -128,15 +128,19 @@ class SensorDataGenerator:
         Args:
             zone_id: 구역 ID
             sensor_info: 센서 정보 {'sensor_id': '...', 'line_number': N}
-            signal_probability: 신호 발생 확률 (0.0 ~ 1.0)
+            signal_probability: 사용되지 않음 (바스켓 기반으로 결정)
             speed_percent: 속도 퍼센트 (0 ~ 100)
         """
         
         line_id = self.generate_line_id(zone_id, sensor_info["line_number"])
         sensor_id = sensor_info["sensor_id"]
         
-        # 신호 확률 기반 신호 결정 (랜덤)
-        signal = random.random() < signal_probability
+        # 센서 위치 계산 (1m 간격)
+        # 센서 번호 → 위치 (line_number가 주어지면 해당 라인의 센서들)
+        sensor_position = self._calculate_sensor_position(zone_id, sensor_info)
+        
+        # 바스켓 기반 신호 결정
+        signal = self._check_basket_at_sensor(zone_id, line_id, sensor_position)
         
         # 신호에 따른 방향/속도 설정
         if signal:
@@ -286,11 +290,12 @@ class SensorDataGenerator:
             
             print(f"[센서 시뮬레이션] Kafka 연결: {bootstrap_servers}, Topic: {topic}")
             print(f"[센서 시뮬레이션] 총 센서: {sum(z['sensors'] for z in self.zones)}개")
-            
+            print(f"[센서 시뮬레이션] self.is_running: {self.is_running}")
             while self.is_running:
                 events_sent = 0
                 
-                # 모든 구역의 모든 센서에서 이벤트 생성
+                # 프로듀서에 이벤트 전송
+                
                 for zone in self.zones:
                     zone_id = zone["zone_id"]
                     sensors = self.get_zone_sensors(zone_id)
@@ -298,20 +303,19 @@ class SensorDataGenerator:
                     for sensor_info in sensors:
                         if not self.is_running:
                             break
-                        
                         event = self.generate_single_event(zone_id, sensor_info, signal_probability, speed_percent)
                         self.producer.send(topic, event)
-                        events_sent += 1
-                    
+                        events_sent += 1 
                     if not self.is_running:
                         break
-                
+                print(f"[센서 시뮬레이션] 전송: {sensors}개 센서 이벤트, 총 {events_sent}개 이벤트 전송")
                 if self.is_running:
                     time.sleep(1)
                     
         except Exception as e:
             print(f"[센서 시뮬레이션 오류] {e}")
         finally:
+            print(f"[센서 시뮬레이션] finally 진입 self.is_running: {self.is_running}")
             if self.producer:
                 self.producer.flush()
             self.is_running = False

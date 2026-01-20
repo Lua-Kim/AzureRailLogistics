@@ -15,6 +15,7 @@ import DataSettingPage from './DataSettingPage';
 import LogisticsBasketPage from './LogisticsBasketPage';
 import EnhancedRealtimeMonitoringPage from './EnhancedRealtimeMonitoringPage';
 import BasketVisualizationPage from './BasketVisualizationPage';
+import VisualizationDebugPage from './VisualizationDebugPage';
 
 // Styles
 import { lightTheme, darkTheme } from './theme';
@@ -269,6 +270,7 @@ const AppContent = ({ themeMode, toggleTheme }) => {
           <StyledNavLink to="/logistis_rail_setting" title="레일 설정"><Box size={24}/></StyledNavLink>
           <StyledNavLink to="/logistis_management" title="물류 관리"><Server size={24}/></StyledNavLink>
           <StyledNavLink to="/data_setting" title="데이터 설정"><Database size={24}/></StyledNavLink>
+          <StyledNavLink to="/visualization_debug" title="디버그"><Activity size={24}/></StyledNavLink>
 
           <ThemeToggleButton onClick={toggleTheme}>
             {renderThemeIcon()}
@@ -306,6 +308,7 @@ const AppContent = ({ themeMode, toggleTheme }) => {
             <Route path="/logistis_management" element={<LogisticsManagementPage />} />
             <Route path="/data_setting" element={<DataSettingPage />} />
             <Route path="/baskets" element={<LogisticsBasketPage />} />
+            <Route path="/visualization_debug" element={<VisualizationDebugPage />} />
           </Routes>
         </MainContent>
       </Container>

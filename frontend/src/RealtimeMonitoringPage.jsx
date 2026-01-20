@@ -8,260 +8,58 @@ const PageContainer = styled.div`
   flex-direction: column;
   gap: 24px;
   padding: 20px;
-  background-color: ${props => props.theme.colors.background};
-  min-height: 100vh;
-`;
+  import React, { useState } from 'react';
+  import axios from 'axios';
 
-const Header = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px;
-  background-color: ${props => props.theme.colors.surface};
-  border-radius: 12px;
-  border: 1px solid ${props => props.theme.colors.border};
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-`;
-
-const Title = styled.h1`
-  font-size: 24px;
-  font-weight: 900;
-  color: ${props => props.theme.colors.text.main};
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-
-  svg {
-    color: ${props => props.theme.colors.primary};
-  }
-`;
-
-const StatusBadge = styled.div`
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  background-color: ${props => props.isActive ? '#10b98166' : '#ef444466'};
-  border: 1px solid ${props => props.isActive ? '#10b981' : '#ef4444'};
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 700;
-  color: ${props => props.isActive ? '#10b981' : '#ef4444'};
-
-  &::before {
-    content: '';
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: currentColor;
-    box-shadow: 0 0 8px currentColor;
-  }
-`;
-
-const Grid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-`;
-
-const Card = styled.div`
-  background-color: ${props => props.theme.colors.surface};
-  border: 1px solid ${props => props.theme.colors.border};
-  border-radius: 12px;
-  padding: 20px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  transition: all 0.3s ease;
-
-  &:hover {
-    border-color: ${props => props.theme.colors.primary};
-    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.15);
-  }
-`;
-
-const CardTitle = styled.h3`
-  font-size: 12px;
-  font-weight: 700;
-  color: ${props => props.theme.colors.text.muted};
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin: 0 0 12px 0;
-`;
-
-const CardValue = styled.div`
-  font-size: 32px;
-  font-weight: 900;
-  color: ${props => props.theme.colors.text.main};
-  margin-bottom: 8px;
-`;
-
-const CardSubtext = styled.p`
-  font-size: 12px;
-  color: ${props => props.theme.colors.text.muted};
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-`;
-
-const Table = styled.div`
-  background-color: ${props => props.theme.colors.surface};
-  border: 1px solid ${props => props.theme.colors.border};
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-`;
-
-const TableHeader = styled.div`
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
-  gap: 16px;
-  padding: 16px 20px;
-  background-color: ${props => props.theme.colors.surfaceHighlight};
-  border-bottom: 2px solid ${props => props.theme.colors.border};
-  font-weight: 700;
-  font-size: 12px;
-  color: ${props => props.theme.colors.text.muted};
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-`;
-
-const TableRow = styled.div`
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
-  gap: 16px;
-  padding: 16px 20px;
-  border-bottom: 1px solid ${props => props.theme.colors.border};
-  align-items: center;
-  transition: all 0.2s ease;
-
-  &:hover {
-    background-color: ${props => props.theme.colors.surfaceHighlight};
-  }
-
-  &:last-child {
-    border-bottom: none;
-  }
-`;
-
-const SensorValue = styled.span`
-  font-size: 13px;
-  font-weight: 600;
-  color: ${props => props.theme.colors.text.main};
-`;
-
-const SignalBadge = styled.span`
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 11px;
-  font-weight: 700;
-  background-color: ${props => props.signal ? '#10b98166' : '#ef444466'};
-  color: ${props => props.signal ? '#10b981' : '#ef4444'};
-`;
-
-const BasketBadge = styled.span`
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 11px;
-  font-weight: 700;
-  background-color: #3b82f666;
-  color: #3b82f6;
-`;
-
-const ZoneBadge = styled.span`
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 11px;
-  font-weight: 700;
-  background-color: #8b5cf666;
-  color: #8b5cf6;
-`;
-
-const ChartContainer = styled.div`
-  background-color: ${props => props.theme.colors.surface};
-  border: 1px solid ${props => props.theme.colors.border};
-  border-radius: 12px;
-  padding: 20px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-`;
-
-const ChartTitle = styled.h3`
-  font-size: 14px;
-  font-weight: 700;
-  color: ${props => props.theme.colors.text.main};
-  margin: 0 0 20px 0;
-`;
-
-const BarChart = styled.div`
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-around;
-  height: 150px;
-  gap: 8px;
-`;
-
-const Bar = styled.div`
-  flex: 1;
-  background: linear-gradient(to top, #3b82f6, #60a5fa);
-  border-radius: 4px 4px 0 0;
-  height: ${props => `${props.height}%`};
-  position: relative;
-  transition: all 0.3s ease;
-  cursor: pointer;
-
-  &:hover {
-    filter: brightness(1.1);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-  }
-
-  &::after {
-    content: '${props => props.value}';
-    position: absolute;
-    top: -20px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 12px;
-    font-weight: 700;
-    color: ${props => props.theme.colors.text.muted};
-  }
-`;
-
-const RealtimeMonitoringPage = () => {
-  const [stats, setStats] = useState({
-    totalBaskets: 0,
-    movingBaskets: 0,
-    totalSensors: 0,
-    activeSignals: 0,
-    zones: [],
-    recentEvents: [],
-  });
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [lastUpdate, setLastUpdate] = useState(new Date());
-  const [simulatorActive, setSimulatorActive] = useState(false);
 
   const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setIsLoading(true);
-        const [basketsRes, eventsRes, zonesRes] = await Promise.all([
-          axios.get(`${API_BASE_URL}/baskets`),
-          axios.get(`${API_BASE_URL}/events/latest?count=20`),
-          axios.get(`${API_BASE_URL}/zones`),
-        ]);
+  const RealtimeMonitoringPage = () => {
+    const [logs, setLogs] = useState([]);
+    const [loading, setLoading] = useState(false);
 
-        // 바스켓 데이터 처리
-        const basketData = basketsRes.data;
-        const baskets = basketData.baskets || (Array.isArray(basketData) ? basketData : []);
-        const movingBaskets = baskets.filter(b => b.status === 'moving' || b.status === 'in_transit').length;
-        
-        // 이벤트 데이터 처리
-        const eventsData = eventsRes.data;
-        const events = eventsData.events || (Array.isArray(eventsData) ? eventsData : []);
-        const activeSignals = events.filter(e => e.signal === true).length;
-        
+    const handleStart = async () => {
+      setLoading(true);
+      let newLogs = [];
+      try {
+        // 바스켓 데이터
+        const basketsRes = await axios.get(`${API_BASE_URL}/baskets`);
+        newLogs.push('=== /baskets 응답 ===');
+        newLogs.push(JSON.stringify(basketsRes.data, null, 2));
+
+        // 이벤트 데이터
+        const eventsRes = await axios.get(`${API_BASE_URL}/events/latest?count=20`);
+        newLogs.push('=== /events/latest 응답 ===');
+        newLogs.push(JSON.stringify(eventsRes.data, null, 2));
+
+        // 존 데이터
+        const zonesRes = await axios.get(`${API_BASE_URL}/zones`);
+        newLogs.push('=== /zones 응답 ===');
+        newLogs.push(JSON.stringify(zonesRes.data, null, 2));
+
+        setLogs(newLogs);
+      } catch (err) {
+        newLogs.push('에러 발생: ' + (err.message || err));
+        setLogs(newLogs);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    return (
+      <div style={{ padding: 24, background: '#18181b', minHeight: '100vh', color: '#e5e7eb', fontFamily: 'monospace' }}>
+        <h2 style={{ fontWeight: 900, fontSize: 22, marginBottom: 16 }}>디버깅 로그 뷰어</h2>
+        <button onClick={handleStart} disabled={loading} style={{ padding: '10px 24px', fontWeight: 700, fontSize: 16, borderRadius: 8, border: 'none', background: '#3b82f6', color: 'white', cursor: 'pointer', marginBottom: 24 }}>
+          {loading ? '로딩 중...' : '시작'}
+        </button>
+        <div style={{ background: '#23272e', borderRadius: 8, padding: 16, minHeight: 300, whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.6, maxHeight: 600, overflowY: 'auto' }}>
+          {logs.length === 0 ? '아직 로그가 없습니다.' : logs.map((line, idx) => <div key={idx}>{line}</div>)}
+        </div>
+      </div>
+    );
+  };
+
+  export default RealtimeMonitoringPage;
         // 존 데이터 처리
         const zones = zonesRes.data || (Array.isArray(zonesRes.data) ? zonesRes.data : []);
         const totalSensors = zones.reduce((sum, zone) => sum + (zone.sensors || 0), 0);

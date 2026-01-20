@@ -18,7 +18,7 @@ import threading
 # sensor_simulator 경로 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'sensor_simulator'))
 from basket_manager import BasketPool
-from simple_sensor_generator import SimpleSensorDataGenerator
+from sensor_data_generator import SensorDataGenerator
 
 app = FastAPI(title="Azure Rail Logistics Backend")
 
@@ -42,6 +42,7 @@ app.add_middleware(
 
 # Kafka Consumer 인스턴스
 consumer = SensorEventConsumer()
+print("Kafka Consumer 인스턴스 생성 완료")
 
 # 센서 데이터 생성기 인스턴스 (새로 생성)
 sensor_generator = None
@@ -92,11 +93,12 @@ async def startup_event():
     finally:
         db.close()
     
-    # 센서 데이터 생성기 새로 생성 (간단한 버전)
-    sensor_generator = SimpleSensorDataGenerator()
+    # 센서 데이터 생성기 새로 생성 (실제 시뮬레이터)
+    sensor_generator = SensorDataGenerator(basket_pool=basket_pool)
     
     # Kafka Consumer 시작
     consumer.start()
+    print("Kafka Consumer 시작 완료")
     
     # 센서 시뮬레이션 자동 시작 (별도 스레드)
     sensor_generator.start()
@@ -131,6 +133,13 @@ async def root():
 async def get_latest_events(count: int = 10):
     """최근 센서 이벤트 조회"""
     events = consumer.get_latest_events(count)
+    print(f"[API] /events/latest 반환: {len(events)}개 이벤트 (프론트엔드 요청)")
+    if events:
+        print(f"  모든 이벤트 정보:")
+        for idx, event in enumerate(events):
+            print(f"    [{idx+1}] {event}")
+    else:
+        print("  반환할 이벤트 없음")
     return {
         "count": len(events),
         "events": events
@@ -261,8 +270,10 @@ async def get_sensor_history(zone_id: str = None, count: int = 100):
 
 @app.get("/zones")
 async def get_zones(db: Session = Depends(data_db)):
-    """모든 존 조회"""
     zones = logis_data_db.get_all_zones(db)
+    print(f"[API] /zones 반환: {len(zones)}개 존")
+    if zones:
+        print(f"  첫번째 존: {zones[0]}")
     return zones
 
 @app.post("/zones")
@@ -394,32 +405,30 @@ async def create_baskets(
 
 @app.get("/baskets")
 async def get_all_baskets(db: Session = Depends(data_db)):
-    """전체 바스켓 조회 (라인 길이 정보 포함)"""
     if basket_pool is None:
+        print("[API] /baskets: Basket pool not initialized")
         return {
             "error": "Basket pool not initialized",
             "baskets": [],
             "statistics": {}
         }
-    
     baskets = basket_pool.get_all_baskets()
-    
-    # 각 바스켓에 라인 길이 정보 추가
     enriched_baskets = []
     for basket in baskets.values():
         basket_copy = basket.copy()
-        
-        # 존이 할당된 경우 DB에서 라인 길이 조회
         if basket_copy["zone_id"]:
             zone = db.query(LogisticsZone).filter(LogisticsZone.zone_id == basket_copy["zone_id"]).first()
             if zone:
                 basket_copy["line_length"] = zone.length
-        
         enriched_baskets.append(basket_copy)
-    
-    # 통계 정보 계산
     stats = basket_pool.get_statistics()
-    
+    print(f"[API] /baskets 반환: {len(enriched_baskets)}개 바스켓, 통계: {stats} (프론트엔드 요청)")
+    # if enriched_baskets:
+    #     print(f"  모든 바스켓 정보:")
+    #     for idx, basket in enumerate(enriched_baskets):
+    #         print(f"    [{idx+1}] {basket}")
+    # else:
+    #     print("  반환할 바스켓 없음")
     return {
         "count": len(enriched_baskets),
         "baskets": enriched_baskets,
@@ -508,8 +517,7 @@ async def get_simulator_status():
     """센서 시뮬레이션 상태 조회"""
     return {
         "running": simulator_running,
-        "events_received": consumer.get_event_count(),
-        "latest_event_time": consumer.get_latest_event_time() if consumer.latest_events else None
+        "events_received": consumer.get_event_count()
     }
 
 if __name__ == "__main__":

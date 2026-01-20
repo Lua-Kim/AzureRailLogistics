@@ -12,7 +12,7 @@ class SensorEventConsumer:
         self.consumer = None
         self.latest_events = []  # 최근 이벤트 저장 (메모리)
         self.max_events = 2000  # 최대 2000개까지 유지 (그래프 표시용 버퍼 확대)
-        self.is_running = False
+        self.is_running = True
         
     def start(self):
         """Consumer 시작"""
@@ -38,6 +38,9 @@ class SensorEventConsumer:
                 break
                 
             event = message.value
+            # 이벤트 수신 로그
+            # print(f"[KafkaConsumer] 새 이벤트 수신: {event}")
+            # print(f"[KafkaConsumer] latest_events 길이: {len(self.latest_events) + 1}")
             
             # 최근 이벤트 목록에 추가
             self.latest_events.append(event)
