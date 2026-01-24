@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
-import { Activity, Database, Server, RefreshCw, PlayCircle } from 'lucide-react';
+import { Activity, Database, Server, RefreshCw } from 'lucide-react';
 
 const Container = styled.div`
   padding: 24px;
@@ -9,7 +9,6 @@ const Container = styled.div`
   display: flex;
   flex-direction: column;
   gap: 24px;
-  overflow: hidden;
 `;
 
 const Title = styled.h2`
@@ -18,7 +17,6 @@ const Title = styled.h2`
   display: flex;
   align-items: center;
   gap: 12px;
-  flex-shrink: 0;
 `;
 
 const Grid = styled.div`
@@ -67,29 +65,6 @@ const VisualizationDebugPage = () => {
   const [baskets, setBaskets] = useState(null);
   const [movements, setMovements] = useState([]);
 
-  const handleCreateBaskets = async () => {
-    try {
-      const res = await fetch('http://localhost:8000/api/baskets/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          zone_id: '01-IB', // 기본값으로 입고 존 시도
-          count: 5
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        alert(`테스트 바스켓 ${data.created_count}개가 생성되었습니다.\n잠시 후 이동 로그가 표시됩니다.`);
-        fetchData();
-      } else {
-        alert(`생성 실패: ${data.message}\n(존 ID가 '01-IB'인 구역이 있는지 확인해주세요)`);
-      }
-    } catch (err) {
-      console.error("Error creating baskets:", err);
-      alert("바스켓 생성 요청 중 오류가 발생했습니다. 백엔드 서버 상태를 확인해주세요.");
-    }
-  };
-
   const fetchData = async () => {
     try {
       const [statusRes, basketsRes, movementsRes] = await Promise.all([
@@ -98,12 +73,9 @@ const VisualizationDebugPage = () => {
         fetch('http://localhost:8000/baskets/movements')
       ]);
       
-      if (statusRes.ok) setStatus(await statusRes.json());
-      if (basketsRes.ok) setBaskets(await basketsRes.json());
-      if (movementsRes.ok) {
-        const moveData = await movementsRes.json();
-        setMovements(Array.isArray(moveData) ? moveData : []);
-      }
+      setStatus(await statusRes.json());
+      setBaskets(await basketsRes.json());
+      setMovements(await movementsRes.json());
     } catch (err) {
       console.error("Debug fetch error:", err);
     }
@@ -117,29 +89,7 @@ const VisualizationDebugPage = () => {
 
   return (
     <Container>
-      <Title>
-        <Activity /> System Debug
-        <button 
-          onClick={handleCreateBaskets}
-          style={{
-            marginLeft: 'auto',
-            padding: '8px 16px',
-            backgroundColor: '#3b82f6',
-            color: 'white',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontWeight: 'bold',
-            fontSize: '14px'
-          }}
-        >
-          <PlayCircle size={18} />
-          테스트 바스켓 생성 (5개)
-        </button>
-      </Title>
+      <Title><Activity /> System Debug</Title>
       
       <Grid>
         <Card>
@@ -155,11 +105,7 @@ const VisualizationDebugPage = () => {
         <Card style={{ gridColumn: '1 / -1' }}>
           <CardHeader><RefreshCw size={20}/> Movement Logs (Real-time)</CardHeader>
           <LogContainer>
-            {(!movements || !Array.isArray(movements) || movements.length === 0) ? (
-              <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
-                현재 이동 중인 바스켓이 없습니다.<br/>상단의 <strong>'테스트 바스켓 생성'</strong> 버튼을 눌러 시뮬레이션을 시작해보세요.
-              </div>
-            ) : 
+            {movements.length === 0 ? 'No movements detected.' : 
               movements.map((m, i) => (
                 <div key={i} style={{ marginBottom: '4px', borderBottom: '1px solid #33333340', paddingBottom: '4px' }}>
                   [{m.timestamp}] <strong>{m.basket_id}</strong> @ {m.zone_id}-{m.line_id} 

@@ -50,6 +50,7 @@ class BasketMovement:
         # 존 순서 결정 (스마트 정렬: 숫자 > IB/SR/OB > 알파벳)
         self.zones = sorted(zones, key=self._get_zone_sort_key)
         self.is_running = False
+        self.stop_event = threading.Event()  # 종료 이벤트 추가
         self.movement_thread = None
         self.lock = threading.Lock()
         
@@ -87,6 +88,7 @@ class BasketMovement:
             print("[바스켓 이동] 이미 실행 중입니다")
             return False
         
+        self.stop_event.clear()  # 이벤트 초기화
         with self.lock:
             self.is_running = True
             self.movement_thread = threading.Thread(
@@ -102,12 +104,18 @@ class BasketMovement:
     
     def stop(self):
         """바스켓 이동 시뮬레이션 중지"""
+        self.stop_event.set()  # 대기 중인 스레드를 즉시 깨움
+        
         with self.lock:
             if not self.is_running:
                 return False
             
             self.is_running = False
         
+        # 스레드가 안전하게 종료될 때까지 잠시 대기
+        if self.movement_thread and self.movement_thread.is_alive():
+            self.movement_thread.join(timeout=1.0)
+            
         print("[바스켓 이동] 바스켓 이동 시뮬레이터 중지")
         return True
     
@@ -125,9 +133,11 @@ class BasketMovement:
     def _movement_worker(self):
         """메인 이동 루프 - 1초마다 실행"""
         try:
-            while self.is_running:
+            while not self.stop_event.is_set():  # 이벤트 기반 루프 체크
                 self._update_basket_positions()
-                time.sleep(1)
+                # 1초 대기하되, 종료 신호(set)가 오면 즉시 리턴
+                if self.stop_event.wait(1.0):
+                    break
         
         except Exception as e:
             print(f"[바스켓 이동] ❌ 오류: {e}")

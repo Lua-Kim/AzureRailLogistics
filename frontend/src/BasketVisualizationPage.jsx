@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
-import { Play, Pause, RefreshCw, Truck } from 'lucide-react';
+import { Play, Pause, RefreshCw, Truck, PlusCircle } from 'lucide-react';
 import axios from 'axios';
 
 const PageContainer = styled.div`
@@ -60,6 +60,19 @@ const Button = styled.button`
     opacity: 0.5;
     cursor: not-allowed;
   }
+`;
+
+const NumberInput = styled.input`
+  width: 70px;
+  padding: 10px;
+  border: 1px solid ${props => props.theme.colors.border};
+  border-radius: 8px;
+  background-color: ${props => props.theme.colors.surface};
+  color: ${props => props.theme.colors.text.main};
+  font-weight: 700;
+  text-align: center;
+  outline: none;
+  font-size: 14px;
 `;
 
 const VisualizationContainer = styled.div`
@@ -196,7 +209,7 @@ const BasketVisualizationPage = () => {
   const [baskets, setBaskets] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [animationTime, setAnimationTime] = useState(0);
+  const [basketCount, setBasketCount] = useState(5);
 
   const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -221,6 +234,63 @@ const BasketVisualizationPage = () => {
     }
   };
 
+  // 초기 로드 시 시뮬레이터 실행 상태 확인 (버튼 상태 동기화)
+  useEffect(() => {
+    const checkSimulatorStatus = async () => {
+      try {
+        const res = await axios.get(`${API_BASE_URL}/simulator/status`);
+        if (res.data) {
+          setAutoRefresh(res.data.running);
+        }
+      } catch (err) {
+        console.error('시뮬레이터 상태 확인 실패:', err);
+      }
+    };
+    checkSimulatorStatus();
+  }, []);
+
+  const handleCreateBasket = async () => {
+    try {
+      // 첫 번째 존(보통 입고) 찾기
+      const targetZone = zones.length > 0 ? zones[0].zone_id : '01-IB';
+      await axios.post(`${API_BASE_URL}/api/baskets/create`, {
+        zone_id: targetZone,
+        count: basketCount
+      });
+      fetchData(); // 데이터 즉시 갱신
+      // alert(`${targetZone} 구역에 바스켓 5개가 투입되었습니다.`); // 너무 잦은 알림 방지
+    } catch (error) {
+      console.error('바스켓 생성 실패:', error);
+      alert('바스켓 생성 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleToggleSimulation = async () => {
+    try {
+      const endpoint = autoRefresh ? '/simulator/stop' : '/simulator/start';
+      await axios.post(`${API_BASE_URL}${endpoint}`);
+      
+      // [추가] 시작 시 바스켓이 하나도 없으면 자동으로 5개 생성
+      if (!autoRefresh && baskets.length === 0) {
+        const targetZone = zones.length > 0 ? zones[0].zone_id : '01-IB';
+        try {
+          await axios.post(`${API_BASE_URL}/api/baskets/create`, {
+            zone_id: targetZone,
+            count: basketCount
+          });
+          console.log('시뮬레이션 시작과 함께 초기 바스켓 자동 생성');
+        } catch (e) {
+          console.error('자동 생성 실패', e);
+        }
+      }
+      
+      setAutoRefresh(!autoRefresh);
+    } catch (error) {
+      console.error('시뮬레이션 제어 실패:', error);
+      alert('시뮬레이션 제어 중 오류가 발생했습니다.');
+    }
+  };
+
   useEffect(() => {
     fetchData();
     
@@ -230,48 +300,21 @@ const BasketVisualizationPage = () => {
     }
   }, [autoRefresh]);
 
-  // 애니메이션 효과
-  useEffect(() => {
-    const animationInterval = setInterval(() => {
-      setAnimationTime(t => (t + 1) % 100);
-    }, 100);
-    return () => clearInterval(animationInterval);
-  }, []);
-
-  // 바스켓에 시뮬레이션 위치 및 라인 분포 추가 (시간에 따라 변동)
-  const enhancedBaskets = baskets.map((basket, idx) => {
-    // 랜덤하게 존 할당
-    const randomZone = zones.length > 0 ? zones[Math.floor(Math.random() * zones.length)] : null;
-    const lineList = randomZone && randomZone.zone_lines ? randomZone.zone_lines : [];
-    // 랜덤하게 라인 할당
-    const randomLineObj = lineList.length > 0 ? lineList[Math.floor(Math.random() * lineList.length)] : null;
-    const lineLength = randomLineObj ? randomLineObj.length : 100;
-    // 바스켓 시작 위치를 균등 분포시키고, 시간에 따라 전체 구간을 따라 이동
-    const start = (idx / baskets.length) * lineLength;
-    const position = (start + animationTime * (lineLength / 100)) % lineLength;
-    return {
-      ...basket,
-      zone_id: randomZone ? randomZone.zone_id : basket.zone_id,
-      line_id: randomLineObj ? randomLineObj.line_id : basket.line_id,
-      position
-    };
-  });
-
   // 존별 바스켓 그룹핑
   const basketsByZone = {};
   zones.forEach(zone => {
     basketsByZone[zone.zone_id] = {
       zone,
-      baskets: enhancedBaskets.filter(b => b.zone_id === zone.zone_id)
+      baskets: baskets.filter(b => b.zone_id === zone.zone_id)
     };
   });
 
   // 통계 계산
   const stats = {
-    totalBaskets: enhancedBaskets.length,
-    inTransit: enhancedBaskets.filter(b => b.status === 'moving' || b.status === 'in_transit').length,
-    arrived: enhancedBaskets.filter(b => b.status === 'arrived').length,
-    available: enhancedBaskets.filter(b => b.status === 'available').length,
+    totalBaskets: baskets.length,
+    inTransit: baskets.filter(b => b.status === 'moving' || b.status === 'in_transit').length,
+    arrived: baskets.filter(b => b.status === 'arrived').length,
+    available: baskets.filter(b => b.status === 'available').length,
   };
 
   return (
@@ -282,9 +325,20 @@ const BasketVisualizationPage = () => {
           바스켓 이동 시각화
         </Title>
         <Controls>
+          <NumberInput 
+            type="number" 
+            min="1" 
+            max="100" 
+            value={basketCount} 
+            onChange={(e) => setBasketCount(Math.max(1, parseInt(e.target.value) || 1))}
+          />
+          <Button $variant="primary" onClick={handleCreateBasket}>
+            <PlusCircle size={16} />
+            바스켓 투입
+          </Button>
           <Button
             $variant="primary"
-            onClick={() => setAutoRefresh(!autoRefresh)}
+            onClick={handleToggleSimulation}
           >
             {autoRefresh ? <Pause size={16} /> : <Play size={16} />}
             {autoRefresh ? '일시 정지' : '재개'}
@@ -339,16 +393,15 @@ const BasketVisualizationPage = () => {
                       <LineName>{line.line_id}</LineName>
                       <LineTrack>
                         {lineBaskets.map((basket) => {
-                          // position: 0~lineLength 범위에서 움직임, CSS left는 0~100%로 변환
-                          const posValue = basket.position ? basket.position : 0;
-                          const positionPercent = lineLength > 0 ? (posValue / lineLength) * 100 : 0;
+                          // 백엔드에서 계산된 progress_percent 사용
+                          const positionPercent = basket.progress_percent || 0;
                           return (
                             <Basket
                               key={basket.basket_id}
                               $position={Math.min(positionPercent, 95)}
                               title={`${basket.basket_id} - ${basket.status}`}
                             >
-                              {zoneBaskets.indexOf(basket) + 1}
+                              {basket.basket_id.split('-').pop()}
                             </Basket>
                           );
                         })}
