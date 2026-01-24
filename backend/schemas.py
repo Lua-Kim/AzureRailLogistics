@@ -74,7 +74,7 @@ class BasketsResponse(BaseModel):
 class BasketCreateRequest(BaseModel):
     """바스켓 생성 요청"""
     zone_id: str              # IB-01
-    line_id: str              # IB-01-001
+    line_id: Optional[str] = None  # IB-01-001 (선택 사항으로 변경)
     count: int                # 생성할 바스켓 수
     destination: Optional[str] = None  # 목적지 (선택사항)
 

@@ -1,5 +1,6 @@
 import threading
 import time
+import random
 from datetime import datetime
 from typing import Dict, List
 from sensor_db import get_db, ZoneDataDB
@@ -11,6 +12,15 @@ from sensor_db import get_db, ZoneDataDB
 - 바스켓이 라인을 따라 이동
 - 라인 끝에 도달하면 상태를 "arrived"로 변경
 - 동시성 관리를 위해 lock 사용
+
+[이동 경로 결정 로직]
+1. Zone 순차 이동 (Flow-based Routing):
+   - Zone ID의 숫자 접두어(01-, 02-) 또는 물류 키워드(IB, SR, OB)를 기준으로 순서를 결정합니다.
+   - 우선순위: 숫자 > 키워드(IB->SR->OB) > 알파벳순
+   - 따라서 "IB-01" 같은 기존 이름도 자동으로 입고->보관->출고 순서로 인식됩니다.
+
+2. Line 랜덤 분산 (Load Balancing):
+   - 다음 Zone으로 이동할 때, 해당 Zone에 여러 라인이 있다면 그중 하나를 무작위로 선택합니다.
 """
 
 
@@ -37,7 +47,8 @@ class BasketMovement:
                 ]
         """
         self.basket_pool = basket_pool
-        self.zones = zones
+        # 존 순서 결정 (스마트 정렬: 숫자 > IB/SR/OB > 알파벳)
+        self.zones = sorted(zones, key=self._get_zone_sort_key)
         self.is_running = False
         self.movement_thread = None
         self.lock = threading.Lock()
@@ -50,6 +61,25 @@ class BasketMovement:
         
         # 통과 시간 (초) - 나중에 프론트에서 변경 가능
         self.transit_time = self.DEFAULT_TRANSIT_TIME
+
+    def _get_zone_sort_key(self, zone):
+        """존 정렬을 위한 키 생성 (물류 흐름 반영)"""
+        zid = zone["zone_id"].upper()
+        
+        # 1. 숫자로 시작하는 경우 (예: 01-IB) -> 가장 높은 우선순위
+        if len(zid) > 0 and zid[0].isdigit():
+            return (0, zid)
+            
+        # 2. 표준 물류 키워드 포함 여부 (IB -> SR -> OB)
+        if "IB" in zid:  # Inbound (입고)
+            return (1, zid)
+        if "SR" in zid:  # Storage/Rack (보관)
+            return (2, zid)
+        if "OB" in zid:  # Outbound (출고)
+            return (3, zid)
+            
+        # 3. 그 외는 알파벳순
+        return (4, zid)
     
     def start(self):
         """바스켓 이동 시뮬레이션 시작"""
@@ -167,22 +197,47 @@ class BasketMovement:
         zone_id = basket["zone_id"]
         line_id = basket["line_id"]
         
-        print(f"[바스켓 이동] ✅ {basket_id} 라인 통과 완료 ({zone_id}/{line_id})")
+        # 다음 이동할 존과 라인 계산
+        next_zone_id, next_line_id = self._get_next_hop(zone_id)
         
-        # 바스켓 상태 업데이트: in_transit → arrived
-        with self.lock:
-            self.basket_pool.update_basket_status(
-                basket_id,
-                "arrived",
-                zone_id=zone_id,
-                line_id=line_id
-            )
+        if next_zone_id:
+            print(f"[바스켓 이동] 🔄 {basket_id} 환승: {zone_id} -> {next_zone_id} ({next_line_id})")
             
-            # 위치 정보 정리
-            if basket_id in self.basket_positions:
-                del self.basket_positions[basket_id]
-            if basket_id in self.basket_lines:
-                del self.basket_lines[basket_id]
+            # 바스켓 상태 업데이트 (위치 변경, 상태는 여전히 in_transit)
+            with self.lock:
+                self.basket_pool.update_basket_status(
+                    basket_id,
+                    "in_transit",
+                    zone_id=next_zone_id,
+                    line_id=next_line_id
+                )
+                
+                # 위치 정보 리셋 (새로운 라인의 0m 지점부터 시작)
+                self.basket_positions[basket_id] = 0.0
+                
+                # 라인 정보 갱신
+                self.basket_lines[basket_id] = {
+                    "zone_id": next_zone_id,
+                    "line_id": next_line_id,
+                    "line_length": self._get_line_length(next_zone_id, next_line_id)
+                }
+        else:
+            print(f"[바스켓 이동] ✅ {basket_id} 최종 도착 완료 ({zone_id}/{line_id})")
+            
+            # 바스켓 상태 업데이트: in_transit → arrived
+            with self.lock:
+                self.basket_pool.update_basket_status(
+                    basket_id,
+                    "arrived",
+                    zone_id=zone_id,
+                    line_id=line_id
+                )
+                
+                # 위치 정보 정리 (시뮬레이션 대상에서 제외)
+                if basket_id in self.basket_positions:
+                    del self.basket_positions[basket_id]
+                if basket_id in self.basket_lines:
+                    del self.basket_lines[basket_id]
     
     def _get_line_length(self, zone_id: str, line_id: str = "A") -> float:
         """라인의 정확한 길이를 데이터베이스에서 조회"""
@@ -194,6 +249,25 @@ class BasketMovement:
         except Exception as e:
             print(f"[바스켓 이동] ⚠️ 라인 길이 조회 실패: {e}")
             return 50.0  # 기본값
+            
+    def _get_next_hop(self, current_zone_id: str):
+        """현재 존의 다음 연결 존과 라인을 결정"""
+        # 로직: zones 리스트 순서대로 이동 (Zone A -> Zone B -> Zone C)
+        for i, zone in enumerate(self.zones):
+            if zone["zone_id"] == current_zone_id:
+                # 다음 존이 있는지 확인
+                if i + 1 < len(self.zones):
+                    next_zone = self.zones[i + 1]
+                    
+                    # 다음 존의 라인 중 하나를 랜덤 선택 (로드 밸런싱 효과)
+                    # 라인 ID 형식: {ZONE_ID}-{001}
+                    lines_count = next_zone.get("lines", 1)
+                    next_line_num = random.randint(1, lines_count)
+                    next_line_id = f"{next_zone['zone_id']}-{next_line_num:03d}"
+                    
+                    return next_zone["zone_id"], next_line_id
+        
+        return None, None
     
     def get_basket_position(self, basket_id: str) -> dict:
         """바스켓의 현재 위치 조회"""

@@ -27,7 +27,7 @@ services:
     image: postgres:15
     environment:
       POSTGRES_USER: admin
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: !postgres16
       POSTGRES_DB: logistics
     ports:
       - "5432:5432"

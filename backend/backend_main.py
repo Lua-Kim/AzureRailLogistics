@@ -14,6 +14,7 @@ from typing import List
 import sys
 import os
 import threading
+import random
 
 # sensor_simulator 경로 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'sensor_simulator'))
@@ -316,8 +317,69 @@ async def delete_zone(zone_id: str, db: Session = Depends(data_db)):
 @app.post("/zones/config/batch")
 async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = Depends(data_db)):
     """zones 전체 설정 (기존 데이터 전부 교체)"""
-    result = logis_data_db.save_batch_zones(db, zones_list)
-    return result
+    print(f"\n[API] /zones/config/batch 요청 수신 (프리셋 저장)")
+    print(f"  - 수신된 존 개수: {len(zones_list)}")
+    for i, zone in enumerate(zones_list):
+        print(f"    [{i+1}] {zone.zone_id} ({zone.name}): Lines={zone.lines}, Sensors={zone.sensors}")
+        
+    try:
+        # 1. 기존 존 ID 목록 조회
+        existing_zones = db.query(LogisticsZone).all()
+        existing_ids = {z.zone_id for z in existing_zones}
+        new_ids = {z.zone_id for z in zones_list}
+        
+        # 2. 삭제 대상 (기존에는 있지만 새 요청에는 없는 존)
+        to_delete = existing_ids - new_ids
+        if to_delete:
+            # 연관된 라인 먼저 삭제 후 존 삭제
+            db.query(LogisticsLine).filter(LogisticsLine.zone_id.in_(to_delete)).delete(synchronize_session=False)
+            db.query(LogisticsZone).filter(LogisticsZone.zone_id.in_(to_delete)).delete(synchronize_session=False)
+
+        # 3. 생성 및 업데이트
+        for zone_data in zones_list:
+            # 존 조회
+            zone = db.query(LogisticsZone).filter(LogisticsZone.zone_id == zone_data.zone_id).first()
+            
+            if zone:
+                # 업데이트
+                zone.name = zone_data.name
+                zone.lines = zone_data.lines
+                zone.length = zone_data.length
+                zone.sensors = zone_data.sensors
+                # 기존 라인 삭제 (라인 설정이 바뀌었을 수 있으므로 재생성)
+                db.query(LogisticsLine).filter(LogisticsLine.zone_id == zone_data.zone_id).delete()
+            else:
+                # 생성
+                zone = LogisticsZone(
+                    zone_id=zone_data.zone_id,
+                    name=zone_data.name,
+                    lines=zone_data.lines,
+                    length=zone_data.length,
+                    sensors=zone_data.sensors
+                )
+                db.add(zone)
+            
+            # 라인 생성 (001, 002... 형식)
+            sensors_per_line = zone_data.sensors // zone_data.lines if zone_data.lines > 0 else 0
+            new_lines = []
+            for i in range(zone_data.lines):
+                line_id = f"{zone_data.zone_id}-{i+1:03d}"
+                new_lines.append(LogisticsLine(
+                    zone_id=zone_data.zone_id,
+                    line_id=line_id,
+                    length=zone_data.length,
+                    sensors=sensors_per_line
+                ))
+            db.add_all(new_lines)
+            
+        db.commit()
+        print("  - 배치 저장 완료 (DB Commit)")
+        return db.query(LogisticsZone).all()
+        
+    except Exception as e:
+        db.rollback()
+        print(f"  - 배치 저장 실패: {e}")
+        raise e
 
 @app.post("/api/baskets/create")
 async def create_baskets(
@@ -354,17 +416,34 @@ async def create_baskets(
             "message": f"Zone '{request_data.zone_id}' not found"
         }
     
-    line = db.query(LogisticsLine).filter(
-        LogisticsLine.zone_id == request_data.zone_id,
-        LogisticsLine.line_id == request_data.line_id
-    ).first()
-    if not line:
-        return {
-            "success": False,
-            "created_count": 0,
-            "baskets": [],
-            "message": f"Line '{request_data.line_id}' in zone '{request_data.zone_id}' not found"
-        }
+    # 라인 결정 로직: line_id가 있으면 검증, 없으면 해당 존의 라인 중 랜덤 선택 (로드 밸런싱)
+    target_lines = []
+    if request_data.line_id:
+        line = db.query(LogisticsLine).filter(
+            LogisticsLine.zone_id == request_data.zone_id,
+            LogisticsLine.line_id == request_data.line_id
+        ).first()
+        if not line:
+            return {
+                "success": False,
+                "created_count": 0,
+                "baskets": [],
+                "message": f"Line '{request_data.line_id}' in zone '{request_data.zone_id}' not found"
+            }
+        target_lines = [request_data.line_id]
+    else:
+        # 라인 미지정 시 해당 존의 모든 라인 조회
+        lines = db.query(LogisticsLine).filter(
+            LogisticsLine.zone_id == request_data.zone_id
+        ).all()
+        if not lines:
+            return {
+                "success": False,
+                "created_count": 0,
+                "baskets": [],
+                "message": f"No lines found in zone '{request_data.zone_id}'"
+            }
+        target_lines = [l.line_id for l in lines]
     
     # 사용 가능한 바스켓 조회
     available_baskets = basket_pool.get_available_baskets()
@@ -383,18 +462,21 @@ async def create_baskets(
         basket = available_baskets[i]
         basket_id = basket["basket_id"]
         
+        # 라인 선택 (지정된 경우 하나만, 아니면 랜덤 로드 밸런싱)
+        selected_line_id = random.choice(target_lines)
+        
         # assign_basket 호출: zone_id, line_id, destination 설정
         destination = request_data.destination or request_data.zone_id
         assigned_basket = basket_pool.assign_basket(
             basket_id,
             request_data.zone_id,
-            request_data.line_id,
+            selected_line_id,
             destination
         )
         
         if assigned_basket:
             created_baskets.append(assigned_basket)
-            print(f"[바스켓 생성] {basket_id} assigned to {request_data.zone_id}-{request_data.line_id} → {destination}")
+            print(f"[바스켓 생성] {basket_id} assigned to {request_data.zone_id}-{selected_line_id} → {destination}")
     
     return {
         "success": True,
@@ -523,4 +605,3 @@ async def get_simulator_status():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

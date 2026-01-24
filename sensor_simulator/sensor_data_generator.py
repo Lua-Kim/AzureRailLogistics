@@ -165,28 +165,40 @@ class SensorDataGenerator:
     
     def _calculate_sensor_position(self, zone_id: str, sensor_info: dict) -> float:
         """
-        센서의 물리적 위치 계산
-        
-        1m 간격으로 배치되므로, 센서 번호에 따라 위치 결정
-        예: 1번 센서 → 1m, 2번 센서 → 2m, ..., 50번 센서 → 50m
-        
+        센서의 물리적 위치 계산 (수정됨)
+
+        센서는 존의 모든 라인에 걸쳐 순차적으로 분산 배치됩니다.
+        센서의 위치는 해당 라인 내에서의 순서에 따라 결정됩니다 (1m 간격).
+
+        예: 4개 라인에 40개 센서가 있다면 각 라인에 10개씩 배치.
+            - 센서 1: 1번 라인의 1m 위치
+            - 센서 2: 2번 라인의 1m 위치
+            - 센서 5: 1번 라인의 2m 위치
+
         Args:
             zone_id: 구역 ID
             sensor_info: {'sensor_id': '...', 'line_number': N}
-        
+
         Returns:
             센서 위치 (m)
         """
-        # sensor_id에서 센서 번호 추출
+        zone = next((z for z in self.zones if z["zone_id"] == zone_id), None)
+        if not zone or zone.get("lines", 0) == 0:
+            return 1.0  # 기본값
+
+        num_lines = zone["lines"]
         sensor_id = sensor_info["sensor_id"]
-        
-        # SENSOR-{ZONE}{NUMBER} 형식에서 NUMBER 추출
+
         try:
-            sensor_number = int(sensor_id[-5:])  # 마지막 5자리
-            position = (sensor_number % 50) + 1  # 1~50 범위 (라인 길이 기본 50m)
-        except:
-            position = 1.0  # 기본값
-        
+            # SENSOR-{ZONE}{NUMBER} 형식에서 NUMBER 추출
+            sensor_number = int(sensor_id[-5:])
+            
+            # 라인 내 위치 계산: (센서번호 - 1) / 라인 수 + 1
+            position = ((sensor_number - 1) // num_lines) + 1
+            
+        except (ValueError, TypeError):
+            position = 1.0  # 오류 발생 시 기본값
+
         return float(position)
     
     def _check_basket_at_sensor(self, zone_id: str, line_id: str, sensor_position: float) -> bool:

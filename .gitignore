@@ -39,13 +39,11 @@ Thumbs.db
 # Testing & Linting
 coverage/
 .eslintcache
-backend/__pycache__/database.cpython-311.pyc
-backend/__pycache__/kafka_consumer.cpython-311.pyc
-backend/__pycache__/models.cpython-311.pyc
-backend/__pycache__/schemas.cpython-311.pyc
-sensor_simulator/__pycache__/basket_manager.cpython-311.pyc
-sensor_simulator/__pycache__/basket_movement.cpython-311.pyc
-sensor_simulator/__pycache__/database.cpython-311.pyc
-sensor_simulator/__pycache__/sensor_data_generator.cpython-311.pyc
-sensor_simulator/__pycache__/sensor_db.cpython-311.pyc
-sensor_simulator/__pycache__/simple_sensor_generator.cpython-311.pyc
+
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Docker configuration
+docker-compose.yml

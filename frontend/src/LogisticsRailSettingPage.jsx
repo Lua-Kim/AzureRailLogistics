@@ -1,16 +1,83 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import styled from 'styled-components';
-import { Plus, Edit, Trash2, X, Save, Box, Minus, Settings, AlertTriangle, BarChart3 } from 'lucide-react';
+import { Plus, Edit, Trash2, X, Save, Box, Minus, Settings, AlertTriangle, BarChart3, HelpCircle, Info } from 'lucide-react';
 import { apiService } from './api';
 
 // --- [Styled Components] ---
 
 const PageContainer = styled.div`
   color: ${props => props.theme.colors.text.main};
+  padding: 32px;
   animation: fadeIn 0.5s ease-out;
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
+  }
+`;
+
+const GuideBox = styled.div`
+  background-color: ${props => props.theme.colors.surfaceHighlight};
+  border: 1px solid ${props => props.theme.colors.primary}40;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 32px;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  
+  .icon-wrapper {
+    background-color: ${props => props.theme.colors.surface};
+    padding: 10px;
+    border-radius: 50%;
+    color: ${props => props.theme.colors.primary};
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .content {
+    flex: 1;
+  }
+  
+  h4 {
+    margin: 0 0 8px 0;
+    font-size: 16px;
+    font-weight: 800;
+    color: ${props => props.theme.colors.text.main};
+  }
+  
+  p {
+    margin: 0 0 12px 0;
+    font-size: 14px;
+    color: ${props => props.theme.colors.text.sub};
+    line-height: 1.5;
+  }
+  
+  ul {
+    margin: 0;
+    padding-left: 20px;
+    font-size: 14px;
+    color: ${props => props.theme.colors.text.sub};
+    
+    li {
+      margin-bottom: 4px;
+      line-height: 1.4;
+      
+      strong {
+        color: ${props => props.theme.colors.primary};
+        font-weight: 700;
+      }
+      
+      code {
+        background-color: ${props => props.theme.colors.background};
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 12px;
+        border: 1px solid ${props => props.theme.colors.border};
+      }
+    }
   }
 `;
 
@@ -77,6 +144,21 @@ const AddButton = styled.button`
     opacity: 0.9;
     box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
   }
+`;
+
+const GuideButton = styled.button`
+  background: none;
+  border: none;
+  color: ${props => props.theme.colors.text.muted};
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  margin-left: 12px;
+  
+  &:hover { color: ${props => props.theme.colors.primary}; }
 `;
 
 const ZoneListContainer = styled.div`
@@ -186,6 +268,7 @@ const ZoneCard = styled.div`
   padding: 24px;
   display: flex;
   flex-direction: column;
+  position: relative;
   gap: 16px;
   transition: all 0.3s ease;
   
@@ -193,6 +276,24 @@ const ZoneCard = styled.div`
     border-color: ${props => props.theme.colors.primary};
     transform: translateY(-4px);
   }
+`;
+
+const StepBadge = styled.div`
+  position: absolute;
+  top: -12px;
+  left: -12px;
+  width: 32px;
+  height: 32px;
+  background-color: ${props => props.theme.colors.primary};
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  font-size: 16px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  z-index: 1;
 `;
 
 const CardHeader = styled.div`
@@ -344,49 +445,49 @@ const ValidationError = styled.div`
 // --- [Initial Data & Presets] ---
 const presets = {
   mfc: [
-    { id: 'MFC-PK', name: '도심 피킹', lines: 20, length: 300, sensors: 300 },
-    { id: 'MFC-SO', name: '패킹/출고', lines: 20, length: 200, sensors: 200 },
+    { id: '01-PK', name: '도심 피킹', lines: 20, length: 300, sensors: 300 },
+    { id: '02-SO', name: '패킹/출고', lines: 20, length: 200, sensors: 200 },
   ],
   tc: [
-    { id: 'TC-XD', name: '크로스도킹', lines: 40, length: 1500, sensors: 1500 },
+    { id: '01-XD', name: '크로스도킹', lines: 40, length: 1500, sensors: 1500 },
   ],
   dc: [
-    { id: 'DC-IB', name: '입고', lines: 40, length: 800, sensors: 800 },
-    { id: 'DC-ST', name: '보관', lines: 100, length: 2000, sensors: 2000 },
-    { id: 'DC-PK', name: '피킹', lines: 80, length: 1500, sensors: 1500 },
-    { id: 'DC-OB', name: '출고', lines: 40, length: 800, sensors: 800 },
+    { id: '01-IB', name: '입고', lines: 40, length: 800, sensors: 800 },
+    { id: '02-ST', name: '보관', lines: 100, length: 2000, sensors: 2000 },
+    { id: '03-PK', name: '피킹', lines: 80, length: 1500, sensors: 1500 },
+    { id: '04-OB', name: '출고', lines: 40, length: 800, sensors: 800 },
   ],
   megaFc: [
-    { id: 'IB-01', name: '입고', lines: 40, length: 800, sensors: 800 },
-    { id: 'IS-01', name: '검수', lines: 40, length: 600, sensors: 600 },
-    { id: 'ST-RC', name: '랙 보관', lines: 200, length: 3000, sensors: 3000 },
-    { id: 'PK-01', name: '피킹', lines: 120, length: 2000, sensors: 2000 },
-    { id: 'PC-01', name: '가공', lines: 30, length: 1000, sensors: 1000 },
-    { id: 'SR-01', name: '분류', lines: 80, length: 1500, sensors: 1500 },
-    { id: 'OB-01', name: '출고', lines: 40, length: 1200, sensors: 1200 },
+    { id: '01-IB', name: '입고', lines: 40, length: 800, sensors: 800 },
+    { id: '02-IS', name: '검수', lines: 40, length: 600, sensors: 600 },
+    { id: '03-ST', name: '랙 보관', lines: 200, length: 3000, sensors: 3000 },
+    { id: '04-PK', name: '피킹', lines: 120, length: 2000, sensors: 2000 },
+    { id: '05-PC', name: '가공', lines: 30, length: 1000, sensors: 1000 },
+    { id: '06-SR', name: '분류', lines: 80, length: 1500, sensors: 1500 },
+    { id: '07-OB', name: '출고', lines: 40, length: 1200, sensors: 1200 },
   ],
   superFc: [
-    { id: 'SFC-IB', name: '입고', lines: 60, length: 1000, sensors: 1000 },
-    { id: 'SFC-IS', name: '검수', lines: 60, length: 800, sensors: 800 },
-    { id: 'SFC-ST', name: '대형 랙 보관', lines: 400, length: 4000, sensors: 4000 },
-    { id: 'SFC-PK', name: '자동 피킹', lines: 200, length: 3000, sensors: 3000 },
-    { id: 'SFC-PC', name: '가공/재작업', lines: 50, length: 1500, sensors: 1500 },
-    { id: 'SFC-SR', name: '지능형 분류', lines: 150, length: 2000, sensors: 2000 },
-    { id: 'SFC-OB', name: '출고/배송', lines: 80, length: 2000, sensors: 2000 },
-    { id: 'SFC-RET', name: '반품 처리', lines: 40, length: 1000, sensors: 1000 },
+    { id: '01-IB', name: '입고', lines: 60, length: 1000, sensors: 1000 },
+    { id: '02-IS', name: '검수', lines: 60, length: 800, sensors: 800 },
+    { id: '03-ST', name: '대형 랙 보관', lines: 400, length: 4000, sensors: 4000 },
+    { id: '04-PK', name: '자동 피킹', lines: 200, length: 3000, sensors: 3000 },
+    { id: '05-PC', name: '가공/재작업', lines: 50, length: 1500, sensors: 1500 },
+    { id: '06-SR', name: '지능형 분류', lines: 150, length: 2000, sensors: 2000 },
+    { id: '07-OB', name: '출고/배송', lines: 80, length: 2000, sensors: 2000 },
+    { id: '08-RET', name: '반품 처리', lines: 40, length: 1000, sensors: 1000 },
   ],
   intlHub: [
-    { id: 'IH-IB', name: '국제 입고', lines: 100, length: 2000, sensors: 2000 },
-    { id: 'IH-CS', name: '통관/검사', lines: 80, length: 1500, sensors: 1500 },
-    { id: 'IH-SR', name: '국제 분류', lines: 200, length: 2500, sensors: 2500 },
-    { id: 'IH-EX', name: '수출 처리', lines: 120, length: 2000, sensors: 2000 },
-    { id: 'IH-OB', name: '국제 출고', lines: 80, length: 1500, sensors: 1500 },
+    { id: '01-IB', name: '국제 입고', lines: 100, length: 2000, sensors: 2000 },
+    { id: '02-CS', name: '통관/검사', lines: 80, length: 1500, sensors: 1500 },
+    { id: '03-SR', name: '국제 분류', lines: 200, length: 2500, sensors: 2500 },
+    { id: '04-EX', name: '수출 처리', lines: 120, length: 2000, sensors: 2000 },
+    { id: '05-OB', name: '국제 출고', lines: 80, length: 1500, sensors: 1500 },
   ],
   autoFc: [
-    { id: 'AF-SR', name: '자동 분류', lines: 300, length: 3000, sensors: 3000 },
-    { id: 'AF-PK', name: '로봇 피킹', lines: 250, length: 2500, sensors: 2500 },
-    { id: 'AF-RB', name: '로봇 팔 처리', lines: 100, length: 2000, sensors: 2000 },
-    { id: 'AF-OB', name: '자동 출고', lines: 150, length: 2000, sensors: 2000 },
+    { id: '01-SR', name: '자동 분류', lines: 300, length: 3000, sensors: 3000 },
+    { id: '02-PK', name: '로봇 피킹', lines: 250, length: 2500, sensors: 2500 },
+    { id: '03-RB', name: '로봇 팔 처리', lines: 100, length: 2000, sensors: 2000 },
+    { id: '04-OB', name: '자동 출고', lines: 150, length: 2000, sensors: 2000 },
   ]
 };
 
@@ -440,35 +541,18 @@ const LogisticsRailSettingPage = () => {
   // zones 변경 시 DB에 저장
   const saveZonesToDB = async (updatedZones) => {
     try {
-      for (const zone of updatedZones) {
-        // 1단계: 존 저장
-        console.log('존 저장 시작:', zone.id);
-        await apiService.createZone({
-          zone_id: zone.id,
-          name: zone.name,
-          lines: zone.lines,
-          length: zone.length,
-          sensors: zone.sensors
-        });
-        console.log('존 저장 완료:', zone.id);
-
-        // 2단계: 라인 생성 (존이 저장된 후)
-        const lines = [];
-        for (let i = 0; i < zone.lines; i++) {
-          lines.push({
-            zone_id: zone.id,
-            line_id: String.fromCharCode(65 + i), // A, B, C, D...
-            length: zone.length,
-            sensors: Math.floor(zone.sensors / zone.lines)
-          });
-        }
-        console.log('라인 저장 시작:', lines);
-        // 라인 저장
-        await apiService.createLines(lines);
-        console.log('라인 저장 완료:', zone.id);
-      }
+      // 개별 저장 대신 일괄 저장(Batch) API 사용으로 변경 (Shift 로직 등 대량 변경 대응)
+      await apiService.setZonesBatch(updatedZones.map(z => ({
+        zone_id: z.id,
+        name: z.name,
+        lines: z.lines,
+        length: z.length,
+        sensors: z.sensors
+      })));
+      console.log('✅ DB 저장 및 동기화 완료');
     } catch (error) {
       console.error('zones 저장 실패:', error);
+      alert('서버 저장 중 오류가 발생했습니다. 변경 사항이 반영되지 않았을 수 있습니다.');
     }
   };
   
@@ -516,9 +600,51 @@ const LogisticsRailSettingPage = () => {
     };
   }, [zones]);
 
+  // 존 정렬 로직 (백엔드와 동일하게 맞춤)
+  const sortedZones = useMemo(() => {
+    return [...zones].sort((a, b) => {
+      const getScore = (zone) => {
+        const zid = zone.id.toUpperCase();
+        // 1. 숫자로 시작 (가장 우선)
+        if (/^\d/.test(zid)) return 1;
+        // 2. 물류 키워드
+        if (zid.includes('IB')) return 2;
+        if (zid.includes('SR')) return 3;
+        if (zid.includes('OB')) return 4;
+        // 3. 그 외
+        return 5;
+      };
+
+      const scoreA = getScore(a);
+      const scoreB = getScore(b);
+
+      if (scoreA !== scoreB) return scoreA - scoreB;
+      
+      // 점수가 같으면 문자열 정렬 (숫자 인식 정렬)
+      return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }, [zones]);
+
   const handleAdd = () => {
     setEditingZone(null);
-    setFormData({ id: '', name: '', lines: '', length: '', sensors: '' });
+    
+    // 비어있는 가장 빠른 순번 찾기 (중간에 삭제된 번호가 있으면 채움)
+    let nextNum = 1;
+    const existingNums = new Set();
+    
+    zones.forEach(zone => {
+      const match = zone.id.match(/^(\d+)/);
+      if (match) {
+        existingNums.add(parseInt(match[1], 10));
+      }
+    });
+
+    while (existingNums.has(nextNum)) {
+      nextNum++;
+    }
+    const nextIdPrefix = `${String(nextNum).padStart(2, '0')}-`; // "08-" 형태로 포맷팅
+
+    setFormData({ id: nextIdPrefix, name: '', lines: '', length: '', sensors: '' });
     setShowForm(true);
   };
 
@@ -555,15 +681,51 @@ const LogisticsRailSettingPage = () => {
         sensors: parseInt(formData.sensors, 10),
     };
 
-    let updatedZones;
-    if (editingZone) { // Update
-      updatedZones = zones.map(z => z.id === editingZone.id ? processedData : z);
-    } else { // Create
-      const newZone = { ...processedData, id: processedData.id || `ZN-${Date.now()}` };
-      updatedZones = [...zones, newZone];
+    // ID에서 순번 추출
+    const match = processedData.id.match(/^(\d+)-/);
+    const targetNum = match ? parseInt(match[1], 10) : null;
+    
+    let finalZones = [...zones];
+
+    // [새 구획 추가]이면서 [순번 충돌]이 발생할 경우 -> 밀어내기(Shift) 로직 수행
+    if (!editingZone && targetNum !== null) {
+      const conflict = zones.some(z => {
+        const m = z.id.match(/^(\d+)-/);
+        return m && parseInt(m[1], 10) === targetNum;
+      });
+
+      if (conflict) {
+        if (window.confirm(`순번 ${targetNum}번 구획이 이미 존재합니다.\n\n기존 ${targetNum}번 이후의 구획들을 뒤로 밀고 이 구획을 삽입하시겠습니까?\n(취소 시 중복된 순번으로 추가됩니다)`)) {
+          // Shift Logic: targetNum 이상인 존들의 ID 숫자 +1
+          finalZones = zones.map(z => {
+            const m = z.id.match(/^(\d+)(-.+)/); // 숫자와 나머지 분리 (예: "02", "-PK")
+            if (m) {
+              const currentNum = parseInt(m[1], 10);
+              if (currentNum >= targetNum) {
+                const newNum = currentNum + 1;
+                const newId = `${String(newNum).padStart(2, '0')}${m[2]}`;
+                return { ...z, id: newId };
+              }
+            }
+            return z;
+          });
+        }
+      }
     }
-    setZones(updatedZones);
-    await saveZonesToDB(updatedZones);
+
+    if (editingZone) { // Update
+      finalZones = finalZones.map(z => z.id === editingZone.id ? processedData : z);
+    } else { // Create
+      // ID 중복 최종 체크 (Shift 안 했을 경우 대비)
+      if (finalZones.some(z => z.id === processedData.id)) {
+        alert('이미 존재하는 구획 ID입니다. 다른 ID를 사용해주세요.');
+        return;
+      }
+      finalZones = [...finalZones, processedData];
+    }
+    
+    setZones(finalZones);
+    await saveZonesToDB(finalZones);
     setShowForm(false);
   };
 
@@ -577,54 +739,15 @@ const LogisticsRailSettingPage = () => {
     const newZones = presets[presetKey];
     setZones(newZones);
     
-    // 프리셋 로드 시: 기존 존은 UPDATE, 새로운 존은 INSERT
     try {
-      // 현재 DB의 모든 존 가져오기
-      const currentData = await apiService.getZonesConfig();
-      const existingZoneIds = new Set(currentData?.map(z => z.zone_id) || []);
-      const newZoneIds = new Set(newZones.map(z => z.id));
-      
-      // 1단계: 새 프리셋의 존들 저장 (있으면 UPDATE, 없으면 INSERT)
-      for (const zone of newZones) {
-        const zoneData = {
-          zone_id: zone.id,
-          name: zone.name,
-          lines: zone.lines,
-          length: zone.length,
-          sensors: zone.sensors
-        };
-        
-        if (existingZoneIds.has(zone.id)) {
-          // 존재하면 UPDATE
-          console.log('존 업데이트:', zone.id);
-          await apiService.updateZone(zone.id, zoneData);
-        } else {
-          // 없으면 INSERT
-          console.log('존 생성:', zone.id);
-          await apiService.createZone(zoneData);
-        }
-
-        // 2단계: 라인 생성 (존 저장 후)
-        const lines = [];
-        for (let i = 0; i < zone.lines; i++) {
-          lines.push({
-            zone_id: zone.id,
-            line_id: String.fromCharCode(65 + i), // A, B, C, D...
-            length: zone.length,
-            sensors: Math.floor(zone.sensors / zone.lines)
-          });
-        }
-        await apiService.createLines(lines);
-      }
-      
-      // 2단계: 프리셋에 없는 기존 존 삭제
-      for (const existingId of existingZoneIds) {
-        if (!newZoneIds.has(existingId)) {
-          console.log('존 삭제:', existingId);
-          await apiService.deleteZone(existingId);
-        }
-      }
-      
+      // 일괄 저장 API를 사용하여 기존 데이터를 덮어쓰고 새 프리셋으로 교체
+      await apiService.setZonesBatch(newZones.map(z => ({
+        zone_id: z.id,
+        name: z.name,
+        lines: z.lines,
+        length: z.length,
+        sensors: z.sensors
+      })));
       console.log(`프리셋 '${presetKey}' 로드 완료`);
     } catch (error) {
       console.error('프리셋 로드 중 오류:', error);
@@ -633,12 +756,35 @@ const LogisticsRailSettingPage = () => {
 
   return (
     <PageContainer>
+      <GuideBox>
+        <div className="icon-wrapper"><Info size={24} /></div>
+        <div className="content">
+          <h4>트래픽 흐름 설정 가이드</h4>
+          <p>
+            시뮬레이션에서 바스켓은 <strong>Zone ID의 정렬 순서</strong>에 따라 구역을 이동합니다. 
+            물류 흐름이 끊기지 않도록 아래 규칙을 참고하여 ID를 설정하세요.
+          </p>
+          <ul>
+            <li><strong>1순위 (권장):</strong> 숫자 접두어 사용 (예: <code>01-IB</code>, <code>02-SR</code>, <code>03-OB</code>)</li>
+            <li><strong>2순위:</strong> 표준 물류 키워드 (<code>IB</code> 입고 → <code>SR</code> 보관 → <code>OB</code> 출고)</li>
+            <li><strong>3순위:</strong> 그 외 알파벳 오름차순</li>
+          </ul>
+        </div>
+      </GuideBox>
+
       <PageHeader>
         <PageTitle>Rail System <span>Configuration</span></PageTitle>
-        <AddButton onClick={handleAdd}>
-          <Plus size={18} />
-          새 구획 추가
-        </AddButton>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <GuideButton onClick={() => alert("ℹ️ [이동 경로 규칙 안내]\n\n바스켓 이동 순서 결정 기준:\n\n1. 이름 앞의 숫자 (예: 01-A, 02-B)\n2. 물류 키워드 (IB → SR → OB)\n3. 그 외 이름순(가나다)\n\n카드의 번호 순서대로 바스켓이 이동합니다.")}>
+            <HelpCircle size={18} />
+            규칙 안내
+          </GuideButton>
+          <div style={{ width: '16px' }} />
+          <AddButton onClick={handleAdd}>
+            <Plus size={18} />
+            새 구획 추가
+          </AddButton>
+        </div>
       </PageHeader>
 
       {/* 그래프 섹션 */}
@@ -732,8 +878,9 @@ const LogisticsRailSettingPage = () => {
         </div>
       ) : (
         <ZoneListContainer>
-          {zones.map(zone => (
+          {sortedZones.map((zone, index) => (
             <ZoneCard key={zone.id}>
+            <StepBadge>{index + 1}</StepBadge>
             <CardHeader>
               <span>{zone.name}</span>
               <span className='icon'><Box size={20} /></span>
@@ -759,9 +906,36 @@ const LogisticsRailSettingPage = () => {
             <CloseButton type="button" onClick={() => setShowForm(false)}><X/></CloseButton>
             <h3>{editingZone ? '구획 정보 수정' : '새 구획 생성'}</h3>
             
+            {/* 순번 선택 UI (새 추가 시에만 표시) */}
+            {!editingZone && (
+              <InputGroup>
+                <Label>희망 순번 (자동 선택됨)</Label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Input 
+                    type="number" 
+                    min="1" 
+                    style={{ width: '80px' }}
+                    value={parseInt(formData.id.match(/^(\d+)/)?.[1] || '0', 10)}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      if (!isNaN(val) && val > 0) {
+                        const prefix = String(val).padStart(2, '0');
+                        // 기존 ID에서 숫자 접두어 제거 후 새 접두어 붙이기
+                        const suffix = formData.id.replace(/^\d+-?/, '') || '';
+                        // suffix가 비어있으면 '-' 붙여줌, 아니면 그대로
+                        const newId = suffix ? `${prefix}-${suffix}` : `${prefix}-`;
+                        setFormData(prev => ({ ...prev, id: newId }));
+                      }
+                    }}
+                  />
+                  <span style={{ fontSize: '13px', color: '#666' }}>번 위치에 삽입 (기존 구획은 뒤로 밀림)</span>
+                </div>
+              </InputGroup>
+            )}
+
             <InputGroup>
-              <Label htmlFor="id">구획 ID</Label>
-              <Input type="text" name="id" value={formData.id} onChange={handleFormChange} required disabled={!!editingZone} placeholder="e.g., PK-02"/>
+              <Label htmlFor="id">구획 ID (자동 생성)</Label>
+              <Input type="text" name="id" value={formData.id} onChange={handleFormChange} required disabled={!!editingZone} placeholder="e.g., 02-PK"/>
             </InputGroup>
 
             <InputGroup>
