@@ -52,7 +52,7 @@ class BasketMovement:
         self.is_running = False
         self.stop_event = threading.Event()  # 종료 이벤트 추가
         self.movement_thread = None
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()  # 재진입 가능한 락 사용 (데드락 방지)
         
         # 바스켓별 위치 추적 (basket_id → position_meters)
         self.basket_positions: Dict[str, float] = {}
@@ -271,7 +271,12 @@ class BasketMovement:
                     
                     # 다음 존의 라인 중 하나를 랜덤 선택 (로드 밸런싱 효과)
                     # 라인 ID 형식: {ZONE_ID}-{001}
-                    lines_count = next_zone.get("lines", 1)
+                    lines_val = next_zone.get("lines")
+                    if isinstance(lines_val, list):
+                        lines_count = len(lines_val)
+                    else:
+                        lines_count = int(lines_val) if lines_val else 1
+                        
                     next_line_num = random.randint(1, lines_count)
                     next_line_id = f"{next_zone['zone_id']}-{next_line_num:03d}"
                     

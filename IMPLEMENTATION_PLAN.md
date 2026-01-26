@@ -1,410 +1,208 @@
-# Azure Rail Logistics - 바스켓 센서 연동 구현 계획서
+# 🛤️ Azure Rail Logistics - 통합 구현 계획서
 
-**작성일**: 2026-01-20  
-**프로젝트 루트**: `c:\Users\EL0100\Desktop\AzureRailLogistics`
-
----
-
-## 📋 목표
-
-센서 이벤트와 바스켓 시뮬레이션을 연동하여:
-- 바스켓이 라인 위에 올려지면 해당 센서들이 순차적으로 감지
-- 바스켓이 라인을 통과하면서 센서 신호가 true → false로 변화
-- 실제 물류 시스템의 바스켓 추적 시뮬레이션 구현
+**최종 업데이트**: 2026-01-26
+**문서 버전**: 2.0
 
 ---
 
-## 🏗️ 아키텍처 개요
+## 1. 📖 개요 (Overview)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     프론트엔드 (React)                       │
-│  [PIPELINE 시작/중지] [바스켓 생성 요청]                    │
-└────────────────┬──────────────────────────┬─────────────────┘
-                 │ API 호출                  │ API 호출
-                 ▼                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                   백엔드 (FastAPI)                           │
-│  ✅ /simulator/start, /stop                                 │
-│  ✅ /simulator/status                                       │
-│  ❌ POST /api/baskets/create (필요)                         │
-└──────────────────────────────────────────────────────────────┘
-                 ▲              ▲                  ▲
-         ┌───────┴──────┬───────┴────────┬────────┴────────┐
-         │              │                │                │
-    센서 생성      바스켓 관리      Movement 시뮬      Kafka
-                                         │
-┌──────────────────────────────────┐    │
-│  센서_시뮬레이터 (독립 프로세스)  │    │
-│  - sensor_data_generator.py ✅   │    │
-│  - basket_movement.py ❌ (필요)  │◄───┘
-│  - database.py ✅               │
-└──────────────────────────────────┘
-```
+이 문서는 Azure Rail Logistics 시스템의 기술적 구현 사항, 아키텍처, 데이터 흐름 및 핵심 컴포넌트의 역할을 상세히 기술합니다. 물류 센터 내 레일 위를 이동하는 바스켓의 움직임을 시뮬레이션하고, 센서 데이터를 생성하여 실시간으로 모니터링하는 시스템의 전체적인 구조와 동작 방식을 설명합니다.
+
+본 문서는 프로젝트의 현재 구현 상태를 정확히 반영하는 것을 목표로 합니다.
 
 ---
 
-## 📊 현재 완성도
+## 2. 🏗️ 시스템 아키텍처 (System Architecture)
 
-| 항목 | 상태 | 설명 |
-|------|------|------|
-| 센서 데이터 생성 | ✅ 완료 | 모든 센서의 상태 1초마다 생성 |
-| ZONES DB 로드 | ✅ 완료 | DB에서 동적으로 존/라인 정보 로드 |
-| 바스켓 풀 생성 | ✅ 완료 | 200개 바스켓 생성, 초기화 |
-| 바스켓 API | ❌ 필요 | 프론트에서 바스켓 생성 요청 API |
-| Movement 시뮬레이터 | ❌ 필요 | (여기가 비어있음) 바스켓 위치 추적 및 업데이트 |
-| 센서-바스켓 연동 | ❌ 필요 | 바스켓 위치 기반 센서 신호 결정 |
-| Kafka 토픽 확장 | ⚠️ 보류 | basket-events 토픽 추가 여부 |
+### 2.1. 아키텍처 다이어그램 (Architecture Diagram)
+
+본 시스템은 **FastAPI 백엔드 서버가 핵심이 되어 시뮬레이션 스레드와 API 서비스를 모두 관장하는 중앙 집중형 아키텍처**를 채택하고 있습니다. 시뮬레이터는 별도의 외부 프로세스가 아닌, 백엔드 애플리케이션의 생명주기와 함께 관리되는 내부 스레드입니다.
+
+```
++--------------------------------------------------------------------------+
+|                        [ React Frontend (웹 브라우저) ]                    |
+|  +--------------------------+  +---------------------------+  +---------+  |
+|  | LogisticsRailSettingPage |  |  BasketVisualizationPage  |  | Debug.. |  |
+|  | (레일/존 설정)           |  |  (실시간 시각화)          |  | (상태)  |  |
+|  +--------------------------+  +---------------------------+  +---------+  |
++-------------------^----------------------------^----------------^---------+
+                    | REST API 호출 (Axios)        | WebSocket/Polling |
+                    v                            |                   |
++--------------------------------------------------------------------------+
+|                        [ FastAPI Backend (서버) ]                          |
+|                                                                          |
+| +-------------------------+    +---------------------------------------+ |
+| |   ▶ FastAPI Endpoints   |    |         ▶ Background Threads          | |
+| |  -/zones (설정 CRUD)    |    |  +-----------------------------------+ | |
+| |  -/baskets (조회/생성)  |    |  | BasketMovement (위치 계산 스레드) | | |
+| |  -/simulator (제어)     |    |  +-----------------------------------+ | |
+| |  -/events (센서 데이터) |    |  | SensorDataGenerator (Kafka 전송)  | | |
+| +-------------------------+    |  +-----------------------------------+ | |
+|             ^ ▲              |  | KafkaConsumer (이벤트 수신 스레드)| | |
+|             | | Shared Memory|  +-----------------------------------+ | |
+|             | +--------------+        |            ▲                 | |
+|             |                |        |            |                 | |
+|             |                |        v            |                 | |
+| +-----------+---------------+  +------+-----------+-----------------+ |
+| |   BasketPool (Thread-Safe)|  |  Logistics DB  |  [ Kafka Broker ] | |
+| | (바스켓 객체 관리)        |  |  (SQLite)      |  - sensor-events  | |
+| +---------------------------+  +----------------+  +-----------------+ |
++--------------------------------------------------------------------------+
+```
+
+### 2.2. 컴포넌트 설명 (Component Descriptions)
+
+| 컴포넌트 | 주요 기술 | 역할 |
+| :--- | :--- | :--- |
+| **Backend** | FastAPI (Python) | API 서버, 시뮬레이션 스레드 관리, DB/Kafka 연동 등 시스템의 모든 비즈니스 로직을 총괄하는 컨트롤 타워입니다. |
+| **Simulator Threads**| `threading` (Python) | 백엔드 프로세스 내에서 동작하는 백그라운드 스레드입니다. `BasketMovement`와 `SensorDataGenerator`가 각각 위치 계산과 센서 데이터 생성을 담당합니다. |
+| **Frontend**| React (JavaScript) | 사용자 인터페이스(UI)를 제공합니다. 시스템 설정, 시뮬레이션 시각화, 디버깅 정보를 웹 브라우저에 렌더링합니다. |
+| **Message Queue**| Apache Kafka | `SensorDataGenerator`가 생성한 센서 이벤트를 `sensor-events` 토픽으로 발행(Produce)하고, 백엔드의 `KafkaConsumer`가 이를 구독(Consume)합니다. |
+| **Database** | SQLite | 물류 센터의 존(Zone), 라인(Line)과 같은 환경 설정 정보를 영구적으로 저장합니다. |
+
+### 2.3. 기술 스택 (Technology Stack)
+
+- **Backend**: Python 3.11+, FastAPI, Uvicorn, SQLAlchemy
+- **Frontend**: React, Styled-Components, Axios
+- **Message Queue**: Apache Kafka
+- **Database**: SQLite
+- **Concurrency**: Python `threading` 모듈
 
 ---
 
-## 🎯 핵심 개념 정의
+## 3. 🌊 데이터 흐름 (Data Flow)
 
-### 1. 바스켓 생명주기
+### 3.1. 레일/존 환경 설정
+1.  **[Frontend]** 사용자가 `LogisticsRailSettingPage`에서 존과 라인의 구성을 설정하고 '저장' 버튼을 클릭합니다.
+2.  **[API]** `POST /zones/config/batch` API가 호출됩니다.
+3.  **[Backend]** 수신된 구성 데이터로 **SQLite DB**의 `logistics_zones`와 `logistics_lines` 테이블을 전체 업데이트(overwrite)합니다.
 
-```
-[available] (풀에서 대기)
-    ↓
-[in_transit] (라인에 올려짐 - assign_basket)
-    ↓ (라인 길이 통과)
-[arrived] (라인 끝에 도달 - 상태 종료)
-```
+### 3.2. 바스켓 생성 및 시뮬레이션
+1.  **[Frontend]** 사용자가 `BasketVisualizationPage`에서 '바스켓 생성' 버튼을 클릭합니다.
+2.  **[API]** `POST /api/baskets/create` API가 호출됩니다.
+3.  **[Backend]**
+    - `BasketPool`에서 가용 바스켓을 조회합니다.
+    - **(Auto-Expansion)** 가용 바스켓이 부족할 경우, 풀의 크기를 동적으로 확장합니다.
+    - 바스켓을 `in_transit` 상태로 변경하고, 요청된 시작 라인에 할당합니다.
+4.  **[Simulator Threads]**
+    - `BasketMovement` 스레드가 `in_transit` 상태의 바스켓을 감지하고, 1초마다 위치를 물리 법칙에 따라 계산 및 업데이트합니다.
+    - `SensorDataGenerator` 스레드는 `BasketMovement`가 계산한 실시간 위치를 참조합니다.
+    - 바스켓이 특정 센서의 감지 범위(`±0.5m`) 내에 들어오면, `signal: true` 이벤트를 생성하여 **Kafka** `sensor-events` 토픽으로 전송합니다.
 
-### 2. 센서 신호 결정
+### 3.3. 실시간 시각화 및 데이터 조회
+1.  **[Backend]** `KafkaConsumer` 스레드가 `sensor-events` 토픽을 실시간으로 구독하고, 수신된 이벤트를 내부 메모리(`latest_events`)에 저장합니다.
+2.  **[Frontend]** `BasketVisualizationPage`가 주기적으로 백엔드 API를 호출합니다.
+    - `GET /baskets`: 모든 바스켓의 최신 상태와 `BasketMovement`가 계산한 실시간 위치(`position_meters`) 정보를 가져옵니다.
+    - `GET /events/latest`: `KafkaConsumer`가 저장한 최근 센서 감지 이벤트를 가져옵니다.
+3.  **[Frontend]** 수신된 데이터를 바탕으로 바스켓의 움직임을 렌더링하고, 활성화된 센서를 화면에 붉은 점으로 표시합니다.
 
-**이전 (❌ 현재 - 확률 기반):**
-```python
-is_moving = random.random() < 0.6  # 60% 확률로 true
-```
-
-**이후 (✅ 변경 필요 - 바스켓 기반):**
-```python
-# 센서 위치에 바스켓이 있거나 지나가는가?
-basket_at_sensor = check_basket_position(sensor_position, baskets)
-signal = True if basket_at_sensor else False
-```
-
-### 3. 바스켓 이동 계산
-
-```
-라인 길이: 50m
-바스켓 너비: 50cm (0.5m)
-통과 시간: 계산 필요 (프론트엔드 매개변수)
-  예: 50m ÷ 50초 = 1m/초
-
-1초당 이동 거리 = 라인길이 / 통과시간
-매초 위치 = 이전위치 + 이동거리
-```
-
-### 4. 센서 배치 규칙
-
-```
-라인 길이: 50m
-센서 간격: 1m
-센서 개수: 50개 (자동 계산)
-센서 위치: 1m, 2m, 3m, ..., 50m
-
-감지 범위 (바스켓 너비 50cm 기준):
-  센서 위치 1m
-  ├─ 0.75m ~ 1.25m 범위 감지
-  └─ 바스켓 진입: true
-  └─ 바스켓 완전 통과: false
-```
+### 3.4. 바스켓 회수 (재사용)
+1.  **[Simulator Threads]** `BasketMovement`는 바스켓이 최종 목적지 라인 끝에 도달하면 상태를 `arrived`로 변경합니다.
+2.  **[Backend]** `recycle_baskets_task` 비동기 백그라운드 작업이 주기적으로 `arrived` 상태의 바스켓을 탐색합니다.
+3.  **[Backend]** 발견된 바스켓의 상태를 다시 `available`로 리셋하여 `BasketPool`에 반환함으로써 재사용 가능하게 만듭니다.
 
 ---
 
-## 📝 데이터베이스 스키마
+## 4. 🧩 핵심 컴포넌트 상세 (Component Details)
 
-### logistics_zones (기존)
-```sql
-CREATE TABLE logistics_zones (
-    id INTEGER PRIMARY KEY,
-    zone_id VARCHAR UNIQUE,      -- IB-01
-    name VARCHAR,                 -- 입고
-    lines INTEGER,                -- 라인 개수: 4
-    length FLOAT,                 -- 라인 길이: 50m
-    sensors INTEGER,              -- 총 센서 개수: 40
-    created_at DATETIME,
-    updated_at DATETIME
-);
-```
+### 4.1. Backend Server (`backend/backend_main.py`)
+- **역할**: 시스템의 메인 컨트롤러. FastAPI 애플리케이션의 생명주기(`startup`, `shutdown`)에 맞춰 모든 백그라운드 서비스(시뮬레이터, Kafka 컨슈머)를 관리합니다.
+- **주요 로직**:
+    - **`startup_event`**: 서버 시작 시 DB 초기화, `BasketPool`, `BasketMovement`, `SensorDataGenerator`, `KafkaConsumer`, `recycle_baskets_task`를 순차적으로 초기화하고 시작합니다. **모든 컴포넌트가 메모리를 공유**하며 유기적으로 동작하는 구조의 핵심입니다.
+    - **`shutdown_event`**: 서버 종료 시 모든 백그라운드 스레드를 안전하게 중지시킵니다.
+    - **REST API 제공**: 프론트엔드와 통신하며 시스템을 제어하고 데이터를 제공하는 모든 엔드포인트를 정의합니다.
 
-### logistics_lines (기존)
-```sql
-CREATE TABLE logistics_lines (
-    id INTEGER PRIMARY KEY,
-    zone_id VARCHAR FK,           -- IB-01
-    line_id VARCHAR,              -- IB-01-001
-    length FLOAT,                 -- 라인 길이: 50m
-    sensors INTEGER,              -- 라인의 센서 개수: 10
-    created_at DATETIME,
-    updated_at DATETIME
-);
-```
+### 4.2. Basket Pool (`sensor_simulator/basket_manager.py`)
+- **역할**: 바스켓 객체의 생성, 할당, 상태 변경, 조회를 담당하는 메모리 내 객체 저장소입니다.
+- **주요 특징**:
+    - **Thread-Safe**: `threading.RLock`을 사용하여 여러 스레드(API 요청, Movement, Sensor)가 동시에 접근해도 데이터 정합성을 보장합니다.
+    - **Auto-Expansion**: 바스켓 생성 요청 시 가용량이 부족하면 `expand_pool`을 통해 자동으로 풀 크기를 늘려 시스템 중단을 방지합니다.
+    - **Lifecycle Management**: 바스켓의 상태를 `available` -> `in_transit` -> `arrived`로 관리합니다.
 
-### 센서 정보 (계산)
-```
-고정값으로 저장하지 않음
-실시간 계산:
-  - 센서 ID: SENSOR-{ZONE}{LINE}{NUMBER}
-  - 센서 위치: 1m, 2m, ..., line.length
-  - 센서 개수: line.length (1m 간격이므로)
-```
+### 4.3. Movement Simulator (`sensor_simulator/basket_movement.py`)
+- **역할**: `in_transit` 상태인 모든 바스켓의 물리적 움직임을 시뮬레이션합니다.
+- **주요 로직**:
+    - **위치 계산**: `_movement_worker` 루프가 1초마다 각 바스켓의 `이동 속도(거리/시간)`를 기반으로 새 위치를 계산하여 `basket_positions` 딕셔너리에 업데이트합니다.
+    - **스마트 라우팅**: `_get_zone_sort_key` 메서드는 Zone ID의 명명 규칙(예: `01-IB`, `02-SR`)을 분석하여, **숫자 > IB/SR/OB 키워드 > 알파벳** 순으로 이동 경로를 자동으로 정렬합니다. 이를 통해 복잡한 설정 없이 물류 흐름 기반의 순차 이동이 가능합니다.
+    - **자동 환승**: `_complete_basket_transit` 메서드는 바스켓이 라인 끝에 도달했을 때, 정렬된 다음 Zone을 찾아 해당 Zone의 라인 중 하나로 **무작위 배정**하여 부하를 분산시킵니다.
+
+### 4.4. Sensor Simulator (`sensor_simulator/sensor_data_generator.py`)
+- **역할**: `BasketMovement`의 실시간 위치 데이터를 기반으로 센서 감지 이벤트를 생성하고 Kafka로 전송합니다.
+- **주요 로직**:
+    - **위치 기반 감지**: `generate_zone_events` 메서드는 더 이상 랜덤 확률에 의존하지 않습니다. `BasketMovement`의 `basket_positions`를 직접 참조하여, 센서의 물리적 위치와 바스켓의 현재 위치가 **실제로 겹치는 경우에만** `signal: true` 이벤트를 생성합니다.
+    - **성능 최적화**: 매번 모든 바스켓을 순회하는 대신, API 호출 시점의 바스켓 위치 정보를 미리 라인별로 그룹화하여 불필요한 반복 계산을 제거했습니다. (O(N*M) -> O(N+M))
+
+### 4.5. Frontend (`frontend/src/`)
+- **`LogisticsRailSettingPage.jsx`**: 사용자가 물류 센터의 전체 레이아웃(존, 라인 수, 길이 등)을 설정하고 서버에 저장하는 페이지입니다.
+- **`BasketVisualizationPage.jsx`**: 시뮬레이션의 핵심 시각화 페이지. API로부터 받은 바스켓 위치와 센서 데이터를 사용해 실시간으로 바스켓의 움직임과 센서 활성 상태를 렌더링합니다.
+- **`VisualizationDebugPage.jsx`**: 시스템의 내부 상태(바스켓 통계, 실시간 위치 로그, Kafka 이벤트 수신 현황)를 모니터링할 수 있는 개발자용 디버그 페이지입니다.
 
 ---
 
-## 🔄 Kafka 토픽 설계
+## 5. 📡 API 명세 (API Specification)
 
-### 1. sensor-events (기존)
-**Topic**: `sensor-events`
-
-**메시지 포맷**:
-```json
-{
-  "zone_id": "IB-01",
-  "line_id": "IB-01-001",
-  "sensor_id": "SENSOR-IB0100001",
-  "signal": true,           // ✅ 수정 필요: 랜덤 → 바스켓 기반
-  "direction": "FORWARD",
-  "speed": 50.0,
-  "timestamp": "2026-01-20T10:00:00Z"
-}
-```
-
-### 2. basket-events (신규 - 검토 필요)
-**Topic**: `basket-events`
-
-**메시지 포맷**:
-```json
-{
-  "basket_id": "BASKET-00001",
-  "zone_id": "IB-01",
-  "line_id": "IB-01-001",
-  "status": "in_transit",      // available, in_transit, arrived
-  "position_meters": 15.5,     // 라인 내 현재 위치
-  "destination": "OB-01",
-  "timestamp": "2026-01-20T10:00:00Z"
-}
-```
-
-**결정 필요**: 
-- ❓ 이 토픽이 필요한가?
-- ❓ 프론트엔드에서 사용할 정보인가?
+| Method | Endpoint | 상태 | 설명 |
+| :--- | :--- | :---: | :--- |
+| `POST` | `/zones/config/batch` | ✅ 완료 | 전체 존/라인 구성을 일괄적으로 업데이트(교체)합니다. |
+| `GET` | `/zones` | ✅ 완료 | 현재 설정된 모든 존과 라인 정보를 조회합니다. |
+| `POST`| `/api/baskets/create` | ✅ 완료 | 지정된 라인(또는 랜덤)에 새로운 바스켓을 생성하여 투입합니다. |
+| `GET` | `/baskets` | ✅ 완료 | 모든 바스켓의 상태 및 실시간 위치 정보를 조회합니다. |
+| `GET` | `/events/latest` | ✅ 완료 | Kafka에서 수신된 최근 센서 이벤트를 조회합니다. |
+| `POST`| `/simulator/start` | ✅ 완료 | 시뮬레이터 스레드를 시작합니다. (서버 시작 시 자동 호출) |
+| `POST`| `/simulator/stop` | ✅ 완료 | 시뮬레이터 스레드를 중지합니다. |
+| `GET` | `/simulator/status` | ✅ 완료 | 시뮬레이터의 현재 실행 상태를 조회합니다. |
 
 ---
 
-## 📂 파일 구조 (예정)
+## 6. 🗃️ 데이터베이스 스키마 (Database Schema)
 
-```
-c:\Users\EL0100\Desktop\AzureRailLogistics\
-├── .env ✅
-├── backend/
-│   ├── database.py ✅
-│   ├── models.py ✅
-│   ├── backend_main.py ✅
-│   ├── basket_routes.py ❌ (필요)
-│   └── ...
-├── sensor_simulator/
-│   ├── database.py ✅
-│   ├── sensor_data_generator.py ✅ (수정 필요)
-│   ├── basket_movement.py ❌ (신규)
-│   ├── sensor_event_schema.json ✅
-│   └── ...
-└── ...
-```
+- **`logistics_zones`**: 물류 구획(Zone)의 마스터 정보 저장
+    - `zone_id` (PK): 구획 고유 ID (예: "IB-01")
+    - `name`: 구획 이름 (예: "입고 A")
+    - `lines`: 보유 라인 수
+    - `length`: 각 라인의 기본 길이 (m)
+    - `sensors`: 구획 내 총 센서 수
+- **`logistics_lines`**: 각 구획에 속한 개별 라인(Line) 정보 저장
+    - `id` (PK)
+    - `zone_id` (FK): 소속된 존의 ID
+    - `line_id`: 라인 고유 ID (예: "IB-01-001")
+    - `length`: 라인별 개별 길이 (m)
+    - `sensors`: 라인별 센서 수
 
 ---
 
-## 🚀 구현 단계별 계획
+## 7. 🚀 실행 방법 (Setup & Run)
 
-### Phase 1: 바스켓 생성 API (백엔드)
-**담당**: backend_main.py 또는 basket_routes.py
+### 7.1. Prerequisites
+- Python 3.9+
+- Node.js 16+
+- Docker (Kafka 실행용)
 
-**목표**: 프론트엔드에서 바스켓 생성 요청 처리
-
-**구현 내용**:
-```python
-# POST /api/baskets/create
-@app.post("/api/baskets/create")
-def create_baskets(
-    zone_id: str,           # IB-01
-    line_id: str,           # IB-01-001
-    count: int,             # 생성할 바스켓 수
-    destination: str = None # 목적지 (선택)
-):
-    # basket_pool에서 available 바스켓 가져오기
-    # assign_basket() 호출로 할당
-    # 응답: 할당된 바스켓 목록
-```
-
-**필요 정보**:
-- ✅ basket_pool: 이미 초기화됨
-- ✅ get_available_baskets(): 이미 구현됨
-- ✅ assign_basket(): 이미 구현됨
-
-**산출물**:
-- `basket_routes.py` 또는 `backend_main.py` 내 엔드포인트
-
----
-
-### Phase 2: Movement 시뮬레이터 (센서_시뮬레이터)
-**담당**: sensor_simulator/basket_movement.py (신규)
-
-**목표**: 1초마다 바스켓 위치 계산 및 업데이트
-
-**구현 내용**:
-```python
-class BasketMovement:
-    def __init__(self, basket_pool, zones):
-        self.basket_pool = basket_pool
-        self.zones = zones
-        self.is_running = False
-        self.thread = None
+### 7.2. 실행 순서
+1.  **Kafka 실행**:
+    ```bash
+    docker-compose up -d
+    ```
+2.  **Backend 실행**:
+    ```bash
+    # venv 활성화
+    source venv/bin/activate 
     
-    def start(self):
-        # 백그라운드 스레드 시작
+    # 패키지 설치
+    pip install -r backend/requirements.txt
     
-    def _movement_worker(self):
-        # 1초마다:
-        # 1. in_transit 바스켓 조회
-        # 2. 위치 계산
-        # 3. 바스켓 업데이트
-        # 4. 끝에 도달하면 status = arrived
+    # 서버 실행
+    uvicorn backend.backend_main:app --reload
+    ```
+3.  **Frontend 실행**:
+    ```bash
+    cd frontend
     
-    def stop(self):
-        # 안전하게 중지
-```
-
-**핵심 로직**:
-```python
-# 위치 계산
-통과시간 = 프론트엔드에서 받은 값 (기본값: 50초)
-라인길이 = zone/line 정보에서 조회
-이동거리_per_second = 라인길이 / 통과시간
-
-매초:
-    현재위치 += 이동거리_per_second
-    if 현재위치 >= 라인길이:
-        status = "arrived"
-        update_basket_status()
-```
-
-**필요 정보**:
-- ✅ basket_pool 인스턴스
-- ✅ zones 정보
-- ❓ 통과 시간 (프론트 매개변수 저장 필요?)
-
-**산출물**:
-- `sensor_simulator/basket_movement.py`
-
----
-
-### Phase 3: 센서 신호 재설계 (센서_시뮬레이터)
-**담당**: sensor_simulator/sensor_data_generator.py (수정)
-
-**목표**: 바스켓 위치 기반으로 센서 신호 결정
-
-**현재 코드** (❌ 제거):
-```python
-def generate_single_event(self, ...):
-    is_moving = random.random() < signal_probability  # ❌ 랜덤
-    signal = is_moving
-```
-
-**변경할 코드** (✅ 추가):
-```python
-def generate_single_event(self, zone_id, sensor_info, ...):
-    # 센서 위치 계산
-    sensor_position = sensor_info["position"]  # 1m, 2m, ...
+    # 패키지 설치
+    npm install
     
-    # 바스켓 위치 조회
-    baskets_at_line = get_baskets_at_line(zone_id, line_id)
-    
-    # 이 센서 위치에 바스켓이 있는가?
-    has_basket = any(
-        basket_overlaps_sensor(basket, sensor_position)
-        for basket in baskets_at_line
-    )
-    
-    signal = has_basket
-```
-
-**필요 정보**:
-- ✅ basket_pool 인스턴스
-- ❓ 바스켓 위치 조회 메서드
-- ❓ 바스켓-센서 겹침 판정 로직
-
-**산출물**:
-- `sensor_data_generator.py` 수정
-- 새 메서드: `_check_basket_at_sensor()`
-
----
-
-### Phase 4: 통합 및 테스트
-**목표**: 전체 시스템 동작 확인
-
-**테스트 시나리오**:
-1. 센서 시뮬레이터 시작
-2. 프론트에서 "바스켓 5개 생성" 요청
-3. Movement 시뮬레이터가 위치 업데이트
-4. 센서 신호가 바스켓을 따라 변화
-5. 라인 끝 도달 시 바스켓 상태 변경
-
-**검증 항목**:
-- ✅ 센서 신호가 바스켓과 일치하는가?
-- ✅ 바스켓 위치가 정확한가?
-- ✅ 라인 끝 도달 감지?
-- ✅ 여러 바스켓 동시 처리?
-
----
-
-## 📌 진행 상황 기록
-
-### 2026-01-20 초기 설계
-- [x] 개념 정의 및 논의
-- [x] 아키텍처 설계
-- [x] 데이터베이스 스키마 확인
-- [ ] Phase 1: 바스켓 생성 API
-- [ ] Phase 2: Movement 시뮬레이터
-- [ ] Phase 3: 센서 신호 재설계
-- [ ] Phase 4: 통합 테스트
-
----
-
-## 🔗 참고 파일
-
-| 파일 | 위치 | 용도 |
-|------|------|------|
-| database.py | sensor_simulator/ | DB 연결, ZONES 로드 |
-| basket_manager.py | sensor_simulator/ | 바스켓 풀 관리 |
-| sensor_data_generator.py | sensor_simulator/ | 센서 이벤트 생성 |
-| backend_main.py | backend/ | FastAPI 백엔드 |
-| models.py | backend/ | 데이터 모델 |
-| .env | 루트 | 환경 설정 |
-
----
-
-## ⚠️ 주의사항
-
-1. **센서 위치 정보**: 현재 DB에 없음
-   - 계산식: 1m 간격 → 0m, 1m, 2m, ..., line_length
-   - 런타임에 생성 필요
-
-2. **동시성 관리**:
-   - basket_pool 접근 시 lock 필요
-   - Movement 시뮬레이터와 센서 제너레이터 동시 접근 주의
-
-3. **통과 시간 파라미터**:
-   - 현재 하드코딩: 50초
-   - 프론트에서 설정 가능하게 변경 필요?
-
-4. **Kafka 토픽**:
-   - basket-events 필요 여부 미결정
-   - 일단 진행하고 필요시 추가
-
----
-
-## 📞 다음 단계
-
-> **현재 상태**: 아키텍처 설계 완료, Phase 1 준비 단계  
-> **다음 작업**: Phase 1 (바스켓 생성 API) 구현 승인 대기
+    # 개발 서버 실행
+    npm start
+    ```
+4.  **접속**: 웹 브라우저에서 `http://localhost:3000`으로 접속합니다.

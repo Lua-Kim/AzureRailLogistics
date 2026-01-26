@@ -31,6 +31,17 @@ class ZoneDataDB:
     """존(Zone)과 라인(Line) 데이터 조회 (순수 SQL, 모델 독립적)"""
     
     @staticmethod
+    def get_line_length(db, zone_id: str, line_id: str) -> float:
+        """라인 길이 조회"""
+        from sqlalchemy import text
+        result = db.execute(
+            text("SELECT length FROM logistics_lines WHERE zone_id = :zone_id AND line_id = :line_id"),
+            {"zone_id": zone_id, "line_id": line_id}
+        )
+        row = result.fetchone()
+        return row[0] if row else 50.0
+
+    @staticmethod
     def get_zones_config_for_sensor(db) -> list:
         """센서 제너레이터용 ZONES 설정 생성
         
@@ -66,25 +77,30 @@ class ZoneDataDB:
         for zone_row in zones:
             zone_id, zone_name, line_count, zone_length, sensor_count = zone_row
             
-            # 라인별 센서 개수 합계 (또는 존 테이블의 sensors 값 사용)
+            # 라인 정보 상세 조회 (리스트로 반환)
             lines_result = db.execute(
                 text("""
-                    SELECT COUNT(*) as line_count, COALESCE(SUM(sensors), 0) as total_sensors
+                    SELECT line_id, length, sensors
                     FROM logistics_lines 
                     WHERE zone_id = :zone_id
+                    ORDER BY line_id
                 """),
                 {"zone_id": zone_id}
             )
-            lines_info = lines_result.fetchone()
-            actual_line_count = lines_info[0] if lines_info else line_count
-            total_sensors = lines_info[1] if lines_info else sensor_count
+            lines_rows = lines_result.fetchall()
+            
+            lines_data = []
+            total_sensors = 0
+            for l_row in lines_rows:
+                lines_data.append({"line_id": l_row[0], "length": l_row[1], "sensors": l_row[2]})
+                total_sensors += l_row[2]
             
             zones_config.append({
                 "zone_id": zone_id,
                 "zone_name": zone_name,
-                "lines": actual_line_count,
+                "lines": lines_data,  # int가 아닌 list 반환
                 "length": zone_length,
-                "sensors": total_sensors
+                "sensors": total_sensors if total_sensors > 0 else sensor_count
             })
         
         return zones_config

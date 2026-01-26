@@ -15,6 +15,7 @@ import sys
 import os
 import threading
 import random
+import asyncio
 
 # sensor_simulator 경로 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'sensor_simulator'))
@@ -59,6 +60,9 @@ simulator_running = False
 # 바스켓 이동 시뮬레이터 인스턴스
 movement_simulator = None
 
+# 바스켓 풀 최대 한도 (메모리 보호용)
+MAX_POOL_SIZE = 20000
+
 def initialize_basket_pool(db: Session):
     """zones 설정을 기반으로 바스켓 풀 초기화"""
     global basket_pool
@@ -81,8 +85,25 @@ def initialize_basket_pool(db: Session):
         zones_lines_config.append(zone_config)
     
     # BasketPool 초기화 (초기 배치 없이 빈 상태로 시작)
-    basket_pool = BasketPool(pool_size=200)
+    basket_pool = BasketPool(pool_size=1000)
     print(f"Basket Pool 초기화 완료: {len(basket_pool.get_all_baskets())}개 바스켓")
+
+async def recycle_baskets_task():
+    """백그라운드 작업: 도착(arrived)한 바스켓을 주기적으로 회수하여 재사용 가능하게 만듦"""
+    print("[Recycler] 바스켓 회수 시스템 가동")
+    while True:
+        try:
+            await asyncio.sleep(5)  # 5초마다 확인
+            if basket_pool:
+                baskets = basket_pool.get_all_baskets()
+                for b_id, basket in baskets.items():
+                    if basket['status'] == 'arrived':
+                        # 상태를 available로 변경하여 다시 투입 가능하도록 리셋
+                        basket_pool.update_basket_status(b_id, 'available')
+                        # print(f"[Recycler] {b_id} 회수 완료 (Arrived -> Available)")
+        except Exception as e:
+            print(f"[Recycler] 오류 발생: {e}")
+            await asyncio.sleep(5)
 
 @app.on_event("startup")
 async def startup_event():
@@ -111,13 +132,13 @@ async def startup_event():
     finally:
         db.close()
     
-    # 센서 데이터 생성기 새로 생성 (실제 시뮬레이터)
-    sensor_generator = SensorDataGenerator(basket_pool=basket_pool)
-    
     # 바스켓 이동 시뮬레이터 시작
     movement_simulator = BasketMovement(basket_pool, zones_config)
     movement_simulator.start()
     print("Basket Movement Simulator 시작 완료")
+    
+    # 센서 데이터 생성기 생성 (공유된 movement_simulator 주입)
+    sensor_generator = SensorDataGenerator(basket_pool=basket_pool, basket_movement=movement_simulator)
     
     # Kafka Consumer 시작
     consumer.start()
@@ -127,6 +148,9 @@ async def startup_event():
     sensor_generator.start()
     simulator_running = True
     print("Backend 서버 시작 완료, 센서 시뮬레이션 실행 중")
+    
+    # 바스켓 회수 백그라운드 태스크 시작
+    asyncio.create_task(recycle_baskets_task())
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -159,9 +183,19 @@ async def root():
     }
 
 @app.get("/events/latest")
-async def get_latest_events(count: int = 10):
+async def get_latest_events(count: int = 10, only_active: bool = False):
     """최근 센서 이벤트 조회"""
-    events = consumer.get_latest_events(count)
+    # consumer.latest_events 리스트를 직접 사용하여 안전하게 조회
+    if hasattr(consumer, 'latest_events') and consumer.latest_events:
+        if only_active:
+            # active인 것만 필터링하여 뒤에서부터 count개 가져오기
+            active_events = [e for e in consumer.latest_events if e.get("signal") == True]
+            events = active_events[-count:]
+        else:
+            events = consumer.latest_events[-count:]
+    else:
+        events = []
+        
     print(f"[API] /events/latest 반환: {len(events)}개 이벤트 (프론트엔드 요청)")
     if events:
         print(f"  모든 이벤트 정보:")
@@ -375,7 +409,8 @@ async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = D
                 zone.length = zone_data.length
                 zone.sensors = zone_data.sensors
                 # 기존 라인 삭제 (라인 설정이 바뀌었을 수 있으므로 재생성)
-                db.query(LogisticsLine).filter(LogisticsLine.zone_id == zone_data.zone_id).delete()
+                deleted_count = db.query(LogisticsLine).filter(LogisticsLine.zone_id == zone_data.zone_id).delete(synchronize_session=False)
+                print(f"    - Zone {zone_data.zone_id}: 기존 라인 {deleted_count}개 삭제됨")
             else:
                 # 생성
                 zone = LogisticsZone(
@@ -399,6 +434,7 @@ async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = D
                     sensors=sensors_per_line
                 ))
             db.add_all(new_lines)
+            print(f"    - Zone {zone_data.zone_id}: 새 라인 {len(new_lines)}개 생성됨")
             
         db.commit()
         print("  - 배치 저장 완료 (DB Commit)")
@@ -476,13 +512,24 @@ async def create_baskets(
     # 사용 가능한 바스켓 조회
     available_baskets = basket_pool.get_available_baskets()
     
+    # [동적 확장] 요청 수량이 가용 수량보다 많으면 풀 확장
     if len(available_baskets) < request_data.count:
-        return {
-            "success": False,
-            "created_count": 0,
-            "baskets": [],
-            "message": f"Not enough available baskets. Available: {len(available_baskets)}, Requested: {request_data.count}"
-        }
+        current_total = len(basket_pool.get_all_baskets())
+        needed = request_data.count - len(available_baskets)
+        
+        # 최대 한도 체크
+        if current_total >= MAX_POOL_SIZE:
+            print(f"[System] 풀 확장 불가: 최대 한도({MAX_POOL_SIZE}) 도달")
+        else:
+            expand_amount = needed + 50  # 여유분
+            # 한도 초과 방지
+            if current_total + expand_amount > MAX_POOL_SIZE:
+                expand_amount = MAX_POOL_SIZE - current_total
+            
+            print(f"[System] 바스켓 부족. {expand_amount}개 추가 생성 (Auto Expansion)")
+            if hasattr(basket_pool, 'expand_pool') and expand_amount > 0:
+                basket_pool.expand_pool(expand_amount)
+                available_baskets = basket_pool.get_available_baskets()
     
     # 바스켓 할당
     created_baskets = []

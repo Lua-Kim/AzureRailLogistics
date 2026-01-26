@@ -138,6 +138,19 @@ const LineTrack = styled.div`
   border: 1px solid ${props => props.theme.colors.border};
 `;
 
+const SensorDot = styled.div`
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: ${props => props.$active ? '#ef4444' : 'rgba(200, 200, 200, 0.3)'};
+  box-shadow: ${props => props.$active ? '0 0 6px #ef4444' : 'none'};
+  z-index: 20;
+  transition: background-color 0.1s, box-shadow 0.1s;
+`;
+
 const Basket = styled.div`
   position: absolute;
   top: 50%;
@@ -311,7 +324,7 @@ const BasketVisualizationPage = () => {
 
   // 통계 계산
   const stats = {
-    totalBaskets: baskets.length,
+    totalBaskets: baskets.filter(b => b.status !== 'available').length,
     inTransit: baskets.filter(b => b.status === 'moving' || b.status === 'in_transit').length,
     arrived: baskets.filter(b => b.status === 'arrived').length,
     available: baskets.filter(b => b.status === 'available').length,
@@ -334,7 +347,7 @@ const BasketVisualizationPage = () => {
           />
           <Button $variant="primary" onClick={handleCreateBasket}>
             <PlusCircle size={16} />
-            바스켓 투입
+            바스켓 투입 (+{basketCount})
           </Button>
           <Button
             $variant="primary"
@@ -352,7 +365,7 @@ const BasketVisualizationPage = () => {
 
       <Stats>
         <StatCard>
-          <StatLabel>전체 바스켓</StatLabel>
+          <StatLabel>투입된 바스켓</StatLabel>
           <StatValue>{stats.totalBaskets}</StatValue>
         </StatCard>
         <StatCard>
@@ -364,7 +377,7 @@ const BasketVisualizationPage = () => {
           <StatValue style={{ color: '#10b981' }}>{stats.arrived}</StatValue>
         </StatCard>
         <StatCard>
-          <StatLabel>사용 가능</StatLabel>
+          <StatLabel>투입 가능</StatLabel>
           <StatValue style={{ color: '#6b7280' }}>{stats.available}</StatValue>
         </StatCard>
       </Stats>
@@ -386,12 +399,27 @@ const BasketVisualizationPage = () => {
                   b => b.line_id === line.line_id
                 );
                 const lineLength = line.length || 300;
+                const sensorsPerLine = Math.max(1, Math.floor((zone.sensors || 0) / (lines.length || 1)));
 
                 return (
                   <div key={line.line_id}>
                     <LineContainer>
                       <LineName>{line.line_id}</LineName>
                       <LineTrack>
+                        {Array.from({ length: sensorsPerLine }).map((_, idx) => {
+                          const sensorPosPercent = ((idx + 1) / (sensorsPerLine + 1)) * 100;
+                          const isActive = lineBaskets.some(b => 
+                            Math.abs((b.progress_percent || 0) - sensorPosPercent) < 1.5
+                          );
+                          return (
+                            <SensorDot 
+                              key={`sensor-${idx}`}
+                              style={{ left: `${sensorPosPercent}%` }}
+                              $active={isActive}
+                              title={`Sensor ${idx + 1}`}
+                            />
+                          );
+                        })}
                         {lineBaskets.map((basket) => {
                           // 백엔드에서 계산된 progress_percent 사용
                           const positionPercent = basket.progress_percent || 0;

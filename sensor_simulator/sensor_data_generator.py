@@ -1,387 +1,267 @@
-import json
-import random
 import time
-from datetime import datetime
-from enum import Enum
-from kafka import KafkaProducer
-import threading
-
 import json
-import random
-import time
-from datetime import datetime
-from enum import Enum
-from kafka import KafkaProducer
 import threading
+from datetime import datetime
+from kafka import KafkaProducer
 
 # 센서_시뮬레이터의 database 모듈 import
 try:
     from sensor_db import get_db, ZoneDataDB
 except ImportError:
-    # 백엔드에서 import되는 경우
-    from sensor_simulator.sensor_db import get_db, ZoneDataDB
+    # 백엔드에서 실행될 경우 경로 문제 해결을 위한 처리
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from sensor_db import get_db, ZoneDataDB
 
 from basket_movement import BasketMovement
-
-# ZONES는 데이터베이스에서 동적으로 로드
-ZONES = []
-
-class Direction(Enum):
-    FORWARD = "FORWARD"
-    STOP = "STOP"
-
 
 class SensorDataGenerator:
     """가상센서 데이터 생성 클래스"""
     
-    def __init__(self, basket_pool=None):
+    def __init__(self, basket_pool=None, basket_movement=None):
         """
         Args:
             basket_pool: BasketPool 인스턴스 (선택사항)
+            basket_movement: 외부에서 주입된 BasketMovement 인스턴스 (선택사항)
         """
-        global ZONES
-        if not ZONES:
-            self._load_zones_from_db()
-        self.zones = ZONES
-        self.is_running = True
-        self.producer = None
+        self.producer = KafkaProducer(
+            bootstrap_servers=['localhost:9092'],
+            value_serializer=lambda x: json.dumps(x).encode('utf-8')
+        )
+        self.is_running = False
+        self.zones = {}
         self.stream_thread = None
-        self.lock = threading.Lock()
+        
+        # DB에서 존 설정 로드
+        self._load_zones_from_db()
         
         # 바스켓 풀 및 이동 시뮬레이터
         self.basket_pool = basket_pool
-        self.basket_movement = None
+        self.basket_movement = basket_movement
         
-        # basket_pool이 제공되면 movement 시뮬레이터 초기화
-        if self.basket_pool:
+        # basket_pool은 있는데 movement가 없으면 내부적으로 생성 (하위 호환성)
+        if self.basket_pool and not self.basket_movement:
             self._initialize_basket_movement()
+        elif self.basket_movement:
+            print("[센서 시뮬레이션] 외부 BasketMovement 인스턴스 연결됨")
     
     def _load_zones_from_db(self):
         """데이터베이스에서 ZONES 설정 로드"""
-        global ZONES
         try:
             db = next(get_db())
             zones_config = ZoneDataDB.get_zones_config_for_sensor(db)
             
-            print(f"[센서 시뮬레이션] ========== DB에서 존 정보 로드 ==========")
-            print(f"[센서 시뮬레이션] 조회된 존: {len(zones_config)}개")
-            
-            # DB에서 가져온 데이터를 ZONES 포맷으로 변환
-            ZONES = []
+            self.zones = {}
             total_sensors = 0
             for zone in zones_config:
-                zone_data = {
-                    "zone_id": zone["zone_id"],
-                    "zone_name": zone["zone_name"],
-                    "lines": zone["lines"],
-                    "length": zone["length"],
-                    "sensors": zone["sensors"]
-                }
-                ZONES.append(zone_data)
+                self.zones[zone["zone_id"]] = zone
                 total_sensors += zone["sensors"]
-                print(f"  ✓ {zone['zone_id']} ({zone['zone_name']})")
-                print(f"    - 라인: {zone['lines']}개, 길이: {zone['length']}m, 센서: {zone['sensors']}개")
-            
-            print(f"[센서 시뮬레이션] ========== 로드 완료 ==========")
+                
+            print(f"[센서 시뮬레이션] DB에서 {len(self.zones)}개 존 설정 로드 완료")
             print(f"[센서 시뮬레이션] 총 센서: {total_sensors}개")
             
         except Exception as e:
             print(f"[센서 시뮬레이션] ❌ DB 로드 실패: {e}")
             import traceback
             traceback.print_exc()
-            raise
-    
+            # DB 연결 실패 시 빈 설정으로 진행하지 않도록 예외 처리
+            self.zones = {}
+
     def _initialize_basket_movement(self):
         """바스켓 이동 시뮬레이터 초기화"""
         try:
-            self.basket_movement = BasketMovement(self.basket_pool, self.zones)
+            # zones 정보를 리스트 형태로 변환하여 전달
+            zones_list = list(self.zones.values())
+            self.basket_movement = BasketMovement(self.basket_pool, zones_list)
             print("[센서 시뮬레이션] 바스켓 이동 시뮬레이터 준비 완료")
         except Exception as e:
             print(f"[센서 시뮬레이션] ⚠️ 바스켓 이동 시뮬레이터 초기화 실패: {e}")
-    
+
+    def start(self):
+        """센서 데이터 생성 시작"""
+        if self.is_running:
+            return
+        
+        self.is_running = True
+        
+        # basket_movement 시작 (내부 생성된 경우에만 제어)
+        if self.basket_movement and not self.basket_movement.is_running:
+            # 외부에서 주입된 경우 이미 실행 중일 수 있으므로 체크
+            try:
+                self.basket_movement.start()
+            except RuntimeError:
+                pass # 이미 실행 중이면 무시
+
+        self.stream_thread = threading.Thread(target=self._stream_sensor_data)
+        self.stream_thread.daemon = True
+        self.stream_thread.start()
+        print("[센서 시뮬레이션] 데이터 스트리밍 시작")
+
+    def stop(self):
+        """센서 데이터 생성 중지"""
+        self.is_running = False
+        if self.stream_thread:
+            self.stream_thread.join()
+            
+        # basket_movement 중지 (내부 생성된 경우에만)
+        if self.basket_movement and hasattr(self.basket_movement, 'stop'):
+            self.basket_movement.stop()
+            
+        print("[센서 시뮬레이션] 데이터 스트리밍 중지")
+
+    def _stream_sensor_data(self):
+        """주기적으로 센서 데이터를 생성하여 Kafka로 전송"""
+        while self.is_running:
+            start_time = time.time()
+            
+            try:
+                events_sent = 0
+                active_count = 0
+                for zone_id in self.zones:
+                    events = self.generate_zone_events(zone_id)
+                    for event in events:
+                        if event.get("signal"):
+                            active_count += 1
+                        self.producer.send('sensor-events', event)
+                        events_sent += 1
+                
+                # print(f"[센서 시뮬레이션] 전송: 총 {events_sent}개 이벤트 (감지됨: {active_count}개)")
+                
+            except Exception as e:
+                print(f"[센서 시뮬레이션] 전송 오류: {e}")
+            
+            # 1초 주기 유지를 위한 대기
+            elapsed = time.time() - start_time
+            sleep_time = max(0, 1.0 - elapsed)
+            time.sleep(sleep_time)
+
     def generate_sensor_id(self, zone_id: str, sensor_number: int) -> str:
         """센서 ID 생성"""
         zone_prefix = zone_id.replace("-", "")
         return f"SENSOR-{zone_prefix}{sensor_number:05d}"
-    
-    def generate_line_id(self, zone_id: str, line_number: int) -> str:
-        """라인 ID 생성"""
-        return f"{zone_id}-{line_number:03d}"
-    
-    def get_zone_sensors(self, zone_id: str) -> list:
-        """특정 구역의 센서 목록 반환"""
-        zone = next((z for z in self.zones if z["zone_id"] == zone_id), None)
-        if not zone:
-            return []
-        
-        sensors = []
-        for i in range(1, zone["sensors"] + 1):
-            sensors.append({
-                "sensor_id": self.generate_sensor_id(zone_id, i),
-                "line_number": (i - 1) % zone["lines"] + 1
-            })
-        return sensors
-    
-    def generate_single_event(self, zone_id: str, sensor_info: dict, signal_probability: float = 0.6, speed_percent: float = 50.0) -> dict:
-        """단일 센서 이벤트 생성
-        
-        Args:
-            zone_id: 구역 ID
-            sensor_info: 센서 정보 {'sensor_id': '...', 'line_number': N}
-            signal_probability: 사용되지 않음 (바스켓 기반으로 결정)
-            speed_percent: 속도 퍼센트 (0 ~ 100)
-        """
-        
-        line_id = self.generate_line_id(zone_id, sensor_info["line_number"])
-        sensor_id = sensor_info["sensor_id"]
-        
-        # 센서 위치 계산 (1m 간격)
-        # 센서 번호 → 위치 (line_number가 주어지면 해당 라인의 센서들)
-        sensor_position = self._calculate_sensor_position(zone_id, sensor_info)
-        
-        # 바스켓 기반 신호 결정
-        signal = self._check_basket_at_sensor(zone_id, line_id, sensor_position)
-        
-        # 신호에 따른 방향/속도 설정
-        if signal:
-            direction = Direction.FORWARD.value
-            max_speed = 100.0
-            speed = round(max_speed * (speed_percent / 100), 2)
-        else:
-            direction = Direction.STOP.value
-            speed = 0.0
 
-        event = {
-            "zone_id": zone_id,
-            "line_id": line_id,
-            "sensor_id": sensor_id,
-            "signal": signal,
-            "direction": direction,
-            "speed": speed,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
-        
-        return event
-    
-    def _calculate_sensor_position(self, zone_id: str, sensor_info: dict) -> float:
-        """
-        센서의 물리적 위치 계산 (수정됨)
-
-        센서는 존의 모든 라인에 걸쳐 순차적으로 분산 배치됩니다.
-        센서의 위치는 해당 라인 내에서의 순서에 따라 결정됩니다 (1m 간격).
-
-        예: 4개 라인에 40개 센서가 있다면 각 라인에 10개씩 배치.
-            - 센서 1: 1번 라인의 1m 위치
-            - 센서 2: 2번 라인의 1m 위치
-            - 센서 5: 1번 라인의 2m 위치
-
-        Args:
-            zone_id: 구역 ID
-            sensor_info: {'sensor_id': '...', 'line_number': N}
-
-        Returns:
-            센서 위치 (m)
-        """
-        zone = next((z for z in self.zones if z["zone_id"] == zone_id), None)
-        if not zone or zone.get("lines", 0) == 0:
-            return 1.0  # 기본값
-
-        num_lines = zone["lines"]
-        sensor_id = sensor_info["sensor_id"]
-
-        try:
-            # SENSOR-{ZONE}{NUMBER} 형식에서 NUMBER 추출
-            sensor_number = int(sensor_id[-5:])
-            
-            # 라인 내 위치 계산: (센서번호 - 1) / 라인 수 + 1
-            position = ((sensor_number - 1) // num_lines) + 1
-            
-        except (ValueError, TypeError):
-            position = 1.0  # 오류 발생 시 기본값
-
-        return float(position)
-    
-    def _check_basket_at_sensor(self, zone_id: str, line_id: str, sensor_position: float) -> bool:
-        """
-        센서 위치에 바스켓이 있는지 확인
-        
-        바스켓 조건:
-        - status = "in_transit"
-        - zone_id와 line_id가 일치
-        - 바스켓 위치(position_meters)가 센서 감지 범위 내
-        
-        감지 범위:
-        - 바스켓 너비: 50cm (0.5m)
-        - 센서가 위치 X에 있으면, X-0.25 ~ X+0.25 범위의 바스켓 감지
-        
-        Args:
-            zone_id: 구역 ID
-            line_id: 라인 ID
-            sensor_position: 센서 위치 (m)
-        
-        Returns:
-            바스켓 있음: True, 없음: False
-        """
-        # basket_movement가 없으면 바스켓 기반 신호 불가
-        if not self.basket_movement:
-            return False
-        
-        try:
-            # 해당 라인의 모든 이동 중인 바스켓 조회
-            all_positions = self.basket_movement.get_all_positions()
-            
-            # 센서 감지 범위
-            BASKET_WIDTH_CM = 0.5  # 50cm
-            detection_range = BASKET_WIDTH_CM / 2  # 양쪽 0.25m
-            
-            for basket_pos in all_positions:
-                # 라인 일치 확인
-                if (basket_pos["zone_id"] == zone_id and 
-                    basket_pos["line_id"] == line_id):
-                    
-                    basket_pos_meters = basket_pos["position_meters"]
-                    
-                    # 감지 범위 내인지 확인
-                    if abs(basket_pos_meters - sensor_position) <= detection_range:
-                        return True
-            
-            return False
-        
-        except Exception as e:
-            # 오류 발생 시 False 반환 (안전)
-            return False
-    
     def generate_zone_events(self, zone_id: str, event_count: int = None) -> list:
-        """특정 구역의 모든 센서 이벤트 생성"""
-        zone = next((z for z in self.zones if z["zone_id"] == zone_id), None)
-        if not zone:
-            return []
-        
-        # 기본값: 활성 센서는 전체의 30~50%
-        if event_count is None:
-            event_count = random.randint(int(zone["sensors"] * 0.3), int(zone["sensors"] * 0.5))
-        
-        sensors = self.get_zone_sensors(zone_id)
-        active_sensors = random.sample(sensors, min(event_count, len(sensors)))
-        
+        """특정 구역의 모든 센서 이벤트 생성 (바스켓 위치 연동)"""
         events = []
-        for sensor_info in active_sensors:
-            event = self.generate_single_event(zone_id, sensor_info)
-            events.append(event)
-        
-        return events
-    
-    def generate_all_zones_events(self) -> list:
-        """모든 구역의 센서 이벤트 생성"""
-        all_events = []
-        for zone in self.zones:
-            zone_events = self.generate_zone_events(zone["zone_id"])
-            all_events.extend(zone_events)
-        
-        return all_events
-    
-    def generate_batch(self, batch_size: int = 10) -> list:
-        """배치 단위로 센서 데이터 생성"""
-        batch = []
-        for _ in range(batch_size):
-            # 임의의 구역 선택
-            zone = random.choice(self.zones)
-            events = self.generate_zone_events(zone["zone_id"], event_count=random.randint(1, 5))
-            batch.extend(events)
-        
-        return batch
-    
-    def _stream_worker(self, bootstrap_servers='localhost:9092', topic='sensor-events', signal_probability: float = 0.6, speed_percent: float = 50.0):
-        """실제 스트리밍을 수행하는 워커 스레드"""
-        try:
-            if not self.producer:
-                self.producer = KafkaProducer(
-                    bootstrap_servers=bootstrap_servers,
-                    value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode('utf-8')
-                )
+        zone_data = self.zones.get(zone_id)
+        if not zone_data:
+            return []
             
-            print(f"[센서 시뮬레이션] Kafka 연결: {bootstrap_servers}, Topic: {topic}")
-            print(f"[센서 시뮬레이션] 총 센서: {sum(z['sensors'] for z in self.zones)}개")
-            print(f"[센서 시뮬레이션] self.is_running: {self.is_running}")
-            while self.is_running:
-                events_sent = 0
+        timestamp = datetime.now().isoformat()
+        lines = zone_data.get("lines", [])
+        
+        # [Fix] lines가 int인 경우 list로 변환 (구버전 DB 호환 및 방어 코드)
+        if isinstance(lines, int):
+            line_count = lines
+            lines = []
+            default_length = zone_data.get("length", 50.0)
+            for i in range(line_count):
+                lines.append({
+                    "line_id": f"{zone_id}-{i+1:03d}",
+                    "length": default_length
+                })
+        
+        # [성능 최적화] 해당 구역의 바스켓 위치를 미리 조회하여 라인별로 그룹화
+        # 매 센서마다 전체 바스켓을 조회하는 비효율(O(N*M))을 제거 -> O(N+M)으로 개선
+        baskets_in_zone = {} # {line_id: [pos_meters, ...]}
+        
+        if self.basket_movement:
+            with self.basket_movement.lock:
+                # 전체 바스켓 중 현재 zone에 있는 것만 필터링
+                # Debug: 바스켓 정보 확인
+                # if len(self.basket_movement.basket_lines) > 0:
+                #     print(f"[Debug] Total baskets: {len(self.basket_movement.basket_lines)}, Checking Zone: {zone_id}")
                 
-                # 프로듀서에 이벤트 전송
+                for basket_id, info in self.basket_movement.basket_lines.items():
+                    # zone_id 비교 시 공백 제거 등 안전하게 처리
+                    if str(info.get("zone_id")).strip() == str(zone_id).strip():
+                        lid = info.get("line_id")
+                        pos = self.basket_movement.basket_positions.get(basket_id)
+                        if lid and pos is not None:
+                            if lid not in baskets_in_zone:
+                                baskets_in_zone[lid] = []
+                            baskets_in_zone[lid].append(pos)
+
+        # 구역 내 모든 라인의 센서 상태 확인
+        for line in lines:
+            line_id = line["line_id"]
+            length = float(line["length"])
+            # 라인별 센서 개수 계산
+            total_zone_sensors = zone_data.get("sensors", 0)
+            total_zone_lines = len(lines)
+            sensors_per_line = max(1, int(total_zone_sensors / total_zone_lines)) if total_zone_lines > 0 else 0
+            
+            interval = length / sensors_per_line if sensors_per_line > 0 else 1.0
+            
+            # 해당 라인에 있는 바스켓들의 위치 목록
+            line_basket_positions = baskets_in_zone.get(line_id, [])
+            DETECTION_RANGE = 0.5
+
+            for i in range(sensors_per_line):
+                sensor_pos = (i + 1) * interval
                 
-                for zone in self.zones:
-                    zone_id = zone["zone_id"]
-                    sensors = self.get_zone_sensors(zone_id)
-                    
-                    for sensor_info in sensors:
-                        if not self.is_running:
-                            break
-                        event = self.generate_single_event(zone_id, sensor_info, signal_probability, speed_percent)
-                        self.producer.send(topic, event)
-                        events_sent += 1 
-                    if not self.is_running:
+                # [최적화] 미리 분류된 바스켓 위치 목록에서만 검색 (훨씬 빠름)
+                signal = False
+                for b_pos in line_basket_positions:
+                    if abs(b_pos - sensor_pos) <= DETECTION_RANGE:
+                        signal = True
                         break
-                print(f"[센서 시뮬레이션] 전송: {sensors}개 센서 이벤트, 총 {events_sent}개 이벤트 전송")
-                if self.is_running:
-                    time.sleep(1)
-                    
-        except Exception as e:
-            print(f"[센서 시뮬레이션 오류] {e}")
-        finally:
-            print(f"[센서 시뮬레이션] finally 진입 self.is_running: {self.is_running}")
-            if self.producer:
-                self.producer.flush()
-            self.is_running = False
-            print("[센서 시뮬레이션] 스트리밍 종료")
-    
-    def stream_to_kafka(self, bootstrap_servers='localhost:9092', topic='sensor-events', signal_probability: float = 0.6, speed_percent: float = 50.0):
-        """Kafka로 센서 데이터 스트리밍 (메인 스레드에서 호출)
-        
-        Args:
-            bootstrap_servers: Kafka 부트스트랩 서버
-            topic: Kafka 토픽명
-            signal_probability: signal이 true일 확률 (0.0 ~ 1.0, 기본값: 0.6)
-            speed_percent: 속도 퍼센트 (0 ~ 100, 기본값: 50)
-        """
-        self._stream_worker(bootstrap_servers, topic, signal_probability, speed_percent)
-    
-    def start(self, bootstrap_servers='localhost:9092', topic='sensor-events', signal_probability: float = 0.6, speed_percent: float = 50.0):
-        """스트리밍 시작 (별도 스레드에서)"""
-        with self.lock:
-            if self.is_running:
-                return False
-            
-            self.is_running = True
-            
-            # basket_movement 시작
-            if self.basket_movement:
-                self.basket_movement.start()
-            
-            self.stream_thread = threading.Thread(
-                target=self._stream_worker,
-                args=(bootstrap_servers, topic, signal_probability, speed_percent),
-                daemon=True
-            )
-            self.stream_thread.start()
-            return True
-    
-    def stop(self):
-        """스트리밍 중지"""
-        with self.lock:
-            if not self.is_running:
-                return False
-            
-            self.is_running = False
-            
-            # basket_movement 중지
-            if self.basket_movement:
-                self.basket_movement.stop()
-            
-            return True
+                
+                sensor_id = f"{line_id}-S{i+1:03d}"
+                
+                event = {
+                    "zone_id": zone_id,
+                    "line_id": line_id,
+                    "sensor_id": sensor_id,
+                    "signal": signal,
+                    "timestamp": timestamp,
+                    "speed": 50.0 if signal else 0.0
+                }
+                events.append(event)
+                
+        return events
 
-
-# 테스트
 if __name__ == "__main__":
-    generator = SensorDataGenerator()
-    
-    # Kafka 스트리밍 시작
-    generator.stream_to_kafka()
+    # 단독 실행 테스트를 위한 메인 블록
+    try:
+        from basket_manager import BasketPool
+    except ImportError:
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from basket_manager import BasketPool
+
+    print("="*60)
+    print("[센서 시뮬레이터] 독립 실행 모드 시작")
+    print("="*60)
+
+    # 1. 바스켓 풀 생성
+    basket_pool = BasketPool(pool_size=100)
+
+    # 2. 센서 생성기 초기화 (BasketMovement는 내부에서 자동 생성됨)
+    generator = SensorDataGenerator(basket_pool=basket_pool)
+
+    # [테스트] 바스켓 5개 투입 (움직임 확인용)
+    if generator.zones:
+        # 첫 번째 존과 라인 찾기
+        first_zone_id = list(generator.zones.keys())[0]
+        lines = generator.zones[first_zone_id].get("lines", [])
+        
+        if lines and isinstance(lines, list) and len(lines) > 0:
+            # lines가 딕셔너리 리스트인 경우
+            first_line_id = lines[0].get("line_id") if isinstance(lines[0], dict) else f"{first_zone_id}-001"
+            
+            print(f"[Main] 테스트 바스켓 5개 투입 -> {first_zone_id} / {first_line_id}")
+            for i in range(5):
+                basket_pool.assign_basket(f"BASKET-{i+1:05d}", first_zone_id, first_line_id)
+
+    # 3. 시작
+    try:
+        generator.start()
+        print("[Main] 시뮬레이션 실행 중 (Ctrl+C로 종료)...")
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[Main] 종료 요청 확인")
+        generator.stop()
