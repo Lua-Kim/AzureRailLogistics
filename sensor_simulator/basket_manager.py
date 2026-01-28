@@ -29,12 +29,15 @@ class BasketPool:
                 basket_id = f"BASKET-{i+1:05d}"
                 self.baskets[basket_id] = {
                     "basket_id": basket_id,
-                    "status": "available",
+                    "status": "available",  # available | in_transit | arrived | stopped
+                    "motion_state": "idle",  # idle | moving | stopped
+                    "is_bottleneck": False,
                     "zone_id": None,
                     "line_id": None,
                     "destination": None,
                     "width_cm": BASKET_WIDTH_CM,
-                    "created_at": datetime.now().isoformat()
+                    "created_at": datetime.now().isoformat(),
+                    "assigned_at": None  # 라인 투입 시각 (병목 체크 유예용)
                 }
 
     def get_all_baskets(self) -> Dict:
@@ -57,6 +60,12 @@ class BasketPool:
         with self.lock:
             return [b for b in self.baskets.values() if b["status"] == status]
 
+    def get_baskets_by_statuses(self, statuses: List[str]) -> List[dict]:
+        """여러 상태를 한 번에 조회"""
+        with self.lock:
+            status_set = set(statuses)
+            return [b for b in self.baskets.values() if b["status"] in status_set]
+
     def assign_basket(self, basket_id: str, zone_id: str, line_id: str, destination: str = None) -> Optional[dict]:
         """바스켓 할당 (available -> in_transit)"""
         with self.lock:
@@ -65,13 +74,15 @@ class BasketPool:
             
             basket = self.baskets[basket_id]
             basket["status"] = "in_transit"
+            basket["motion_state"] = "moving"
+            basket["is_bottleneck"] = False
             basket["zone_id"] = zone_id
             basket["line_id"] = line_id
             basket["destination"] = destination
             basket["assigned_at"] = datetime.now().isoformat()
             return basket
 
-    def update_basket_status(self, basket_id: str, status: str, zone_id: str = None, line_id: str = None):
+    def update_basket_status(self, basket_id: str, status: str, zone_id: str = None, line_id: str = None, *, motion_state: str = None, is_bottleneck: bool = None):
         """바스켓 상태 업데이트"""
         with self.lock:
             if basket_id not in self.baskets:
@@ -79,6 +90,10 @@ class BasketPool:
             
             basket = self.baskets[basket_id]
             basket["status"] = status
+            if motion_state:
+                basket["motion_state"] = motion_state
+            if is_bottleneck is not None:
+                basket["is_bottleneck"] = is_bottleneck
             if zone_id: basket["zone_id"] = zone_id
             if line_id: basket["line_id"] = line_id
             basket["updated_at"] = datetime.now().isoformat()
@@ -89,13 +104,26 @@ class BasketPool:
             total = len(self.baskets)
             available = sum(1 for b in self.baskets.values() if b["status"] == "available")
             in_transit = sum(1 for b in self.baskets.values() if b["status"] == "in_transit")
+            stopped = sum(1 for b in self.baskets.values() if b["status"] == "stopped")
             arrived = sum(1 for b in self.baskets.values() if b["status"] == "arrived")
             return {
                 "total": total,
                 "available": available,
                 "in_transit": in_transit,
+                "stopped": stopped,
                 "arrived": arrived
             }
+
+    def set_motion_state(self, basket_id: str, motion_state: str, *, is_bottleneck: bool = None):
+        """모션 상태/병목 플래그만 빠르게 갱신"""
+        with self.lock:
+            if basket_id not in self.baskets:
+                return
+            basket = self.baskets[basket_id]
+            basket["motion_state"] = motion_state
+            if is_bottleneck is not None:
+                basket["is_bottleneck"] = is_bottleneck
+            basket["updated_at"] = datetime.now().isoformat()
 
     def expand_pool(self, additional_count: int):
         """바스켓 풀 크기 동적 확장"""
@@ -110,6 +138,8 @@ class BasketPool:
                 self.baskets[basket_id] = {
                     "basket_id": basket_id,
                     "status": "available",
+                    "motion_state": "idle",
+                    "is_bottleneck": False,
                     "zone_id": None,
                     "line_id": None,
                     "destination": None,

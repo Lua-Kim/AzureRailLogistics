@@ -1,13 +1,19 @@
 # 🛤️ Azure Rail Logistics - 통합 구현 계획서
 
 **최종 업데이트**: 2026-01-26
-**문서 버전**: 2.0
+**문서 버전**: 3.0
 
 ---
 
 ## 1. 📖 개요 (Overview)
 
 이 문서는 Azure Rail Logistics 시스템의 기술적 구현 사항, 아키텍처, 데이터 흐름 및 핵심 컴포넌트의 역할을 상세히 기술합니다. 물류 센터 내 레일 위를 이동하는 바스켓의 움직임을 시뮬레이션하고, 센서 데이터를 생성하여 실시간으로 모니터링하는 시스템의 전체적인 구조와 동작 방식을 설명합니다.
+
+**최근 추가된 주요 기능:**
+- 🎯 센서 어댑터 패턴 (시뮬레이터 ↔ 실제 센서 전환)
+- 🚦 구간별 속도 제어 (라인 세그먼트 기반 동적 속도 조정)
+- 🔴 병목 감지 및 시각화 (정지/재개 시뮬레이션)
+- 📊 실시간 시각화 개선 (속도 구간 오버레이, 가이드 패널)
 
 본 문서는 프로젝트의 현재 구현 상태를 정확히 반영하는 것을 목표로 합니다.
 
@@ -28,25 +34,26 @@
 |  +--------------------------+  +---------------------------+  +---------+  |
 +-------------------^----------------------------^----------------^---------+
                     | REST API 호출 (Axios)        | WebSocket/Polling |
-                    v                            |                   |
+                    v                             |                   |
 +--------------------------------------------------------------------------+
 |                        [ FastAPI Backend (서버) ]                          |
 |                                                                          |
 | +-------------------------+    +---------------------------------------+ |
-| |   ▶ FastAPI Endpoints   |    |         ▶ Background Threads          | |
+| |   ▶ FastAPI Endpoints   |    |         ▶ Sensor Adapter Layer        | |
 | |  -/zones (설정 CRUD)    |    |  +-----------------------------------+ | |
-| |  -/baskets (조회/생성)  |    |  | BasketMovement (위치 계산 스레드) | | |
-| |  -/simulator (제어)     |    |  +-----------------------------------+ | |
-| |  -/events (센서 데이터) |    |  | SensorDataGenerator (Kafka 전송)  | | |
-| +-------------------------+    |  +-----------------------------------+ | |
-|             ^ ▲              |  | KafkaConsumer (이벤트 수신 스레드)| | |
-|             | | Shared Memory|  +-----------------------------------+ | |
+| |  -/baskets (조회/생성)  |    |  | SimulatorAdapter / RealAdapter    | | |
+| |  -/simulator (제어)     |    |  | (SENSOR_ADAPTER 환경변수로 전환) | | |
+| |  -/events (센서 데이터) |    |  +-----------------------------------+ | |
+| +-------------------------+    |         ▼                ▼             | |
+|             ^ ▲              |  +-------------------+ +--------------+ | |
+|             | | Shared Memory|  | BasketMovement    | | Real Sensor  | | |
+|             | |              |  | (위치/속도/병목)  | | Gateway      | | |
 |             | +--------------+        |            ▲                 | |
 |             |                |        |            |                 | |
 |             |                |        v            |                 | |
 | +-----------+---------------+  +------+-----------+-----------------+ |
 | |   BasketPool (Thread-Safe)|  |  Logistics DB  |  [ Kafka Broker ] | |
-| | (바스켓 객체 관리)        |  |  (SQLite)      |  - sensor-events  | |
+| | (바스켓 객체 관리)       b  |  |  (SQLite)       |  - sensor-events  | |
 | +---------------------------+  +----------------+  +-----------------+ |
 +--------------------------------------------------------------------------+
 ```
@@ -56,8 +63,9 @@
 | 컴포넌트 | 주요 기술 | 역할 |
 | :--- | :--- | :--- |
 | **Backend** | FastAPI (Python) | API 서버, 시뮬레이션 스레드 관리, DB/Kafka 연동 등 시스템의 모든 비즈니스 로직을 총괄하는 컨트롤 타워입니다. |
-| **Simulator Threads**| `threading` (Python) | 백엔드 프로세스 내에서 동작하는 백그라운드 스레드입니다. `BasketMovement`와 `SensorDataGenerator`가 각각 위치 계산과 센서 데이터 생성을 담당합니다. |
-| **Frontend**| React (JavaScript) | 사용자 인터페이스(UI)를 제공합니다. 시스템 설정, 시뮬레이션 시각화, 디버깅 정보를 웹 브라우저에 렌더링합니다. |
+| **Sensor Adapter**| 추상 인터페이스 | 센서 데이터 소스를 추상화합니다. 환경 변수(`SENSOR_ADAPTER`)로 시뮬레이터와 실제 센서를 전환할 수 있습니다. |
+| **Simulator Threads**| `threading` (Python) | 백엔드 프로세스 내에서 동작하는 백그라운드 스레드입니다. `BasketMovement`가 위치/속도/병목을 계산하고 `SensorDataGenerator`가 센서 데이터를 생성합니다. |
+| **Frontend**| React (JavaScript) | 사용자 인터페이스(UI)를 제공합니다. 시스템 설정, 실시간 시각화(속도 구간, 병목 표시), 디버깅 정보를 웹 브라우저에 렌더링합니다. |
 | **Message Queue**| Apache Kafka | `SensorDataGenerator`가 생성한 센서 이벤트를 `sensor-events` 토픽으로 발행(Produce)하고, 백엔드의 `KafkaConsumer`가 이를 구독(Consume)합니다. |
 | **Database** | SQLite | 물류 센터의 존(Zone), 라인(Line)과 같은 환경 설정 정보를 영구적으로 저장합니다. |
 
@@ -119,11 +127,15 @@
     - **Thread-Safe**: `threading.RLock`을 사용하여 여러 스레드(API 요청, Movement, Sensor)가 동시에 접근해도 데이터 정합성을 보장합니다.
     - **Auto-Expansion**: 바스켓 생성 요청 시 가용량이 부족하면 `expand_pool`을 통해 자동으로 풀 크기를 늘려 시스템 중단을 방지합니다.
     - **Lifecycle Management**: 바스켓의 상태를 `available` -> `in_transit` -> `arrived`로 관리합니다.
+    - **Motion State**: `motion_state` 필드로 이동 상태를 추적합니다 (`idle`, `moving`, `stopped`).
+    - **Bottleneck Detection**: `is_bottleneck` 플래그로 병목 상황의 바스켓을 표시하고 통계에 `stopped` 카운트를 포함합니다.
 
 ### 4.3. Movement Simulator (`sensor_simulator/basket_movement.py`)
 - **역할**: `in_transit` 상태인 모든 바스켓의 물리적 움직임을 시뮬레이션합니다.
 - **주요 로직**:
     - **위치 계산**: `_movement_worker` 루프가 1초마다 각 바스켓의 `이동 속도(거리/시간)`를 기반으로 새 위치를 계산하여 `basket_positions` 딕셔너리에 업데이트합니다.
+    - **구간별 속도 제어**: `line_speed_zones`로 각 라인을 센서 개수 기반의 세그먼트로 분할하고, 세그먼트마다 속도 배율(`multiplier`: 0.5x ~ 1.5x)을 동적으로 적용합니다. `_zone_speed_worker` 스레드가 5~15초마다 랜덤으로 속도 구간을 변경합니다.
+    - **병목 감지 및 제어**: 같은 라인의 바스켓 간 거리가 1m 미만이면 뒤따르는 바스켓을 `stopped` 상태로 변경하고 `is_bottleneck=true`로 표시합니다. 선행 바스켓이 충분히 멀어지면 순차적으로 재개합니다.
     - **스마트 라우팅**: `_get_zone_sort_key` 메서드는 Zone ID의 명명 규칙(예: `01-IB`, `02-SR`)을 분석하여, **숫자 > IB/SR/OB 키워드 > 알파벳** 순으로 이동 경로를 자동으로 정렬합니다. 이를 통해 복잡한 설정 없이 물류 흐름 기반의 순차 이동이 가능합니다.
     - **자동 환승**: `_complete_basket_transit` 메서드는 바스켓이 라인 끝에 도달했을 때, 정렬된 다음 Zone을 찾아 해당 Zone의 라인 중 하나로 **무작위 배정**하여 부하를 분산시킵니다.
 
@@ -131,11 +143,16 @@
 - **역할**: `BasketMovement`의 실시간 위치 데이터를 기반으로 센서 감지 이벤트를 생성하고 Kafka로 전송합니다.
 - **주요 로직**:
     - **위치 기반 감지**: `generate_zone_events` 메서드는 더 이상 랜덤 확률에 의존하지 않습니다. `BasketMovement`의 `basket_positions`를 직접 참조하여, 센서의 물리적 위치와 바스켓의 현재 위치가 **실제로 겹치는 경우에만** `signal: true` 이벤트를 생성합니다.
+    - **구간별 속도 반영**: 센서 이벤트에 해당 위치의 `speed` 값을 포함합니다. `BasketMovement`의 `_get_speed_at_position`을 호출하여 현재 세그먼트의 속도 배율을 반영합니다.
     - **성능 최적화**: 매번 모든 바스켓을 순회하는 대신, API 호출 시점의 바스켓 위치 정보를 미리 라인별로 그룹화하여 불필요한 반복 계산을 제거했습니다. (O(N*M) -> O(N+M))
 
 ### 4.5. Frontend (`frontend/src/`)
 - **`LogisticsRailSettingPage.jsx`**: 사용자가 물류 센터의 전체 레이아웃(존, 라인 수, 길이 등)을 설정하고 서버에 저장하는 페이지입니다.
 - **`BasketVisualizationPage.jsx`**: 시뮬레이션의 핵심 시각화 페이지. API로부터 받은 바스켓 위치와 센서 데이터를 사용해 실시간으로 바스켓의 움직임과 센서 활성 상태를 렌더링합니다.
+    - **속도 구간 시각화**: `SpeedSegment` 컴포넌트로 각 라인의 속도 구간을 색상별로 표시합니다 (노란색: 0.5x, 초록색: 1.5x).
+    - **병목 표시**: `is_bottleneck=true`인 바스켓을 빨간색 그라데이션과 테두리로 강조 표시합니다.
+    - **가이드 패널**: 속도 구간 색상과 바스켓 상태의 의미를 설명하는 범례를 제공합니다.
+    - **리셋 버튼**: `/simulator/reset` API를 호출하여 시뮬레이션을 초기 상태로 되돌립니다.
 - **`VisualizationDebugPage.jsx`**: 시스템의 내부 상태(바스켓 통계, 실시간 위치 로그, Kafka 이벤트 수신 현황)를 모니터링할 수 있는 개발자용 디버그 페이지입니다.
 
 ---
@@ -147,11 +164,12 @@
 | `POST` | `/zones/config/batch` | ✅ 완료 | 전체 존/라인 구성을 일괄적으로 업데이트(교체)합니다. |
 | `GET` | `/zones` | ✅ 완료 | 현재 설정된 모든 존과 라인 정보를 조회합니다. |
 | `POST`| `/api/baskets/create` | ✅ 완료 | 지정된 라인(또는 랜덤)에 새로운 바스켓을 생성하여 투입합니다. |
-| `GET` | `/baskets` | ✅ 완료 | 모든 바스켓의 상태 및 실시간 위치 정보를 조회합니다. |
+| `GET` | `/baskets` | ✅ 완료 | 모든 바스켓의 상태 및 실시간 위치 정보를 조회합니다. (`motion_state`, `is_bottleneck` 포함) |
 | `GET` | `/events/latest` | ✅ 완료 | Kafka에서 수신된 최근 센서 이벤트를 조회합니다. |
-| `POST`| `/simulator/start` | ✅ 완료 | 시뮬레이터 스레드를 시작합니다. (서버 시작 시 자동 호출) |
-| `POST`| `/simulator/stop` | ✅ 완료 | 시뮬레이터 스레드를 중지합니다. |
-| `GET` | `/simulator/status` | ✅ 완료 | 시뮬레이터의 현재 실행 상태를 조회합니다. |
+| `POST`| `/simulator/start` | ✅ 완료 | 센서 어댑터를 시작합니다. (서버 시작 시 자동 호출) |
+| `POST`| `/simulator/stop` | ✅ 완료 | 센서 어댑터를 중지합니다. |
+| `POST`| `/simulator/reset` | ✅ 완료 | 시뮬레이션을 초기화합니다. 모든 바스켓을 `available` 상태로 되돌립니다. |
+| `GET` | `/simulator/status` | ✅ 완료 | 센서 어댑터의 현재 실행 상태를 조회합니다. (`adapter_type`, `line_speed_zones` 포함) |
 
 ---
 
@@ -206,3 +224,97 @@
     npm start
     ```
 4.  **접속**: 웹 브라우저에서 `http://localhost:3000`으로 접속합니다.
+
+---
+
+## 8. 🔌 센서 어댑터 시스템 (Sensor Adapter System)
+
+### 8.1. 개요
+센서 어댑터 패턴을 통해 개발/테스트 환경에서는 시뮬레이터를, 프로덕션 환경에서는 실제 센서를 코드 수정 없이 전환할 수 있습니다.
+
+### 8.2. 어댑터 구조
+```
+sensor_adapter/
+├── __init__.py          # 팩토리 함수 export
+├── base.py              # SensorAdapter 추상 인터페이스
+├── simulator_adapter.py # 시뮬레이터 어댑터 (개발/테스트용)
+├── real_sensor_adapter.py # 실제 센서 어댑터 (프로덕션용)
+└── factory.py           # 어댑터 생성 팩토리
+```
+
+### 8.3. 어댑터 인터페이스
+모든 어댑터는 다음 메서드를 구현합니다:
+- `start()`: 센서 데이터 수집 시작
+- `stop()`: 센서 데이터 수집 중지
+- `get_status()`: 현재 상태 조회 (line_speed_zones 등)
+- `reset()`: 시뮬레이션 초기화
+- `get_movement_simulator()`: MovementSimulator 인스턴스 반환 (호환성 유지)
+
+### 8.4. 환경별 전환
+
+#### 개발/테스트 환경 (시뮬레이터)
+```bash
+# 기본값이므로 환경 변수 불필요
+python backend/backend_main.py
+```
+
+#### 프로덕션 환경 (실제 센서)
+```bash
+export SENSOR_ADAPTER=real_sensor
+export SENSOR_GATEWAY_URL=http://sensor-gateway.company.com
+export SENSOR_PROTOCOL=REST  # 또는 MQTT, MODBUS
+export KAFKA_BROKER=localhost:9092
+export SENSOR_POLL_INTERVAL=1
+python backend/backend_main.py
+```
+
+### 8.5. 실제 센서 통합 요구사항
+
+#### 센서 데이터 포맷
+실제 센서에서 다음 정보를 제공해야 합니다:
+
+**필수 필드:**
+- `sensor_id`: 센서 고유 ID (예: "01-PK-002-S001")
+- `basket_id`: 감지된 바스켓 ID (예: "BASKET-00123")
+- `timestamp`: 이벤트 발생 시각 (ISO 8601 형식)
+
+**선택 필드:**
+- `speed`: 바스켓 이동 속도 (m/s)
+- `line_id`: 라인 ID
+- `zone_id`: 존 ID
+- `event_type`: 이벤트 유형 ("detection", "arrival", "departure")
+
+#### 구현 가이드
+`sensor_adapter/real_sensor_adapter.py`의 TODO 메서드를 구현하세요:
+1. `_connect_to_gateway()`: 센서 게이트웨이 연결
+2. `_poll_sensor_data()`: REST/HTTP 기반 데이터 폴링
+3. `_subscribe_sensor_events()`: MQTT/WebSocket 기반 이벤트 구독
+4. `_convert_sensor_data_to_kafka_event()`: 데이터 포맷 변환
+
+상세한 통합 가이드는 [README.md](README.md#6-센서-어댑터-시스템-sensor-adapter-system)를 참조하세요.
+
+---
+
+## 9. 🚦 주요 기능 상세
+
+### 9.1. 구간별 속도 제어 (Line Speed Zones)
+- **목적**: 라인 구간별로 다른 속도를 적용하여 실제 물류 환경의 가변 속도를 시뮬레이션합니다.
+- **구현**:
+  - 각 라인을 센서 개수 기반의 세그먼트로 분할
+  - 세그먼트마다 속도 배율(0.5x ~ 1.5x) 적용
+  - `_zone_speed_worker` 스레드가 5~15초마다 랜덤 세그먼트의 속도 변경
+- **시각화**: 프론트엔드에서 노란색(0.5x), 초록색(1.5x) 오버레이로 표시
+
+### 9.2. 병목 감지 및 제어 (Bottleneck Detection)
+- **목적**: 바스켓 간 충돌을 방지하고 현실적인 교통 흐름을 시뮬레이션합니다.
+- **구현**:
+  - 같은 라인의 바스켓 간 거리가 1m 미만이면 후행 바스켓을 `stopped` 상태로 전환
+  - `is_bottleneck=true` 플래그 설정
+  - 선행 바스켓이 충분히 멀어지면 순차적으로 재개
+- **시각화**: 빨간색 그라데이션과 테두리로 병목 바스켓 강조
+
+### 9.3. 실시간 통계 및 모니터링
+- 바스켓 상태 분포: `available`, `in_transit`, `stopped`, `arrived`
+- 라인별 바스켓 분포 및 밀집도
+- 센서 이벤트 수신 현황
+- 어댑터 타입 및 상태

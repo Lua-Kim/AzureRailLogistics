@@ -20,8 +20,10 @@ import asyncio
 # sensor_simulator 경로 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'sensor_simulator'))
 from basket_manager import BasketPool
-from sensor_data_generator import SensorDataGenerator
-from basket_movement import BasketMovement
+
+# sensor_adapter 경로 추가
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from sensor_adapter import create_adapter
 
 app = FastAPI(title="Azure Rail Logistics Backend")
 
@@ -47,18 +49,14 @@ app.add_middleware(
 consumer = SensorEventConsumer()
 print("Kafka Consumer 인스턴스 생성 완료")
 
-# 센서 데이터 생성기 인스턴스 (새로 생성)
-sensor_generator = None
-sensor_generator_thread = None
+# 센서 어댑터 인스턴스
+sensor_adapter = None
 
 # Basket Pool 인스턴스 (나중에 zones 설정으로 초기화)
 basket_pool = None
 
 # 센서 시뮬레이터 상태
 simulator_running = False
-
-# 바스켓 이동 시뮬레이터 인스턴스
-movement_simulator = None
 
 # 바스켓 풀 최대 한도 (메모리 보호용)
 MAX_POOL_SIZE = 20000
@@ -108,7 +106,7 @@ async def recycle_baskets_task():
 @app.on_event("startup")
 async def startup_event():
     """서버 시작 시 Kafka Consumer 시작"""
-    global simulator_running, sensor_generator, sensor_generator_thread, movement_simulator
+    global simulator_running, sensor_adapter
     
     init_data_db()  # 데이터베이스 초기화
     
@@ -117,7 +115,7 @@ async def startup_event():
     try:
         initialize_basket_pool(db)
         
-        # BasketMovement 초기화를 위한 zones 정보 조회
+        # zones 정보 조회
         zones = logis_data_db.get_all_zones(db)
         zones_config = [
             {
@@ -132,39 +130,32 @@ async def startup_event():
     finally:
         db.close()
     
-    # 바스켓 이동 시뮬레이터 시작
-    movement_simulator = BasketMovement(basket_pool, zones_config)
-    movement_simulator.start()
-    print("Basket Movement Simulator 시작 완료")
-    
-    # 센서 데이터 생성기 생성 (공유된 movement_simulator 주입)
-    sensor_generator = SensorDataGenerator(basket_pool=basket_pool, basket_movement=movement_simulator)
+    # 센서 어댑터 생성 및 시작 (환경 변수 기반)
+    # SENSOR_ADAPTER=simulator (기본값) 또는 real_sensor
+    sensor_adapter = create_adapter(
+        basket_pool=basket_pool,
+        zones_config=zones_config
+    )
+    sensor_adapter.start()
+    simulator_running = True
+    print(f"센서 어댑터 시작 완료: {type(sensor_adapter).__name__}")
     
     # Kafka Consumer 시작
     consumer.start()
     print("Kafka Consumer 시작 완료")
     
-    # 센서 시뮬레이션 자동 시작 (별도 스레드)
-    sensor_generator.start()
-    simulator_running = True
-    print("Backend 서버 시작 완료, 센서 시뮬레이션 실행 중")
+    print("Backend 서버 시작 완료")
     
     # 바스켓 회수 백그라운드 태스크 시작
     asyncio.create_task(recycle_baskets_task())
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """서버 종료 시 Kafka Consumer와 센서 시뮬레이터 중지"""
+    """서버 종료 시 Kafka Consumer와 센서 어댑터 중지"""
     try:
-        sensor_generator.stop()  # 센서 생성기 중지
+        sensor_adapter.stop()  # 센서 어댑터 중지
     except Exception as e:
-        print(f"센서 생성기 중지 오류: {e}")
-    
-    try:
-        if movement_simulator:
-            movement_simulator.stop()
-    except Exception as e:
-        print(f"Movement Simulator 중지 오류: {e}")
+        print(f"센서 어댑터 중지 오류: {e}")
     
     try:
         consumer.stop()
@@ -578,12 +569,14 @@ async def get_all_baskets(db: Session = Depends(data_db)):
             if zone:
                 basket_copy["line_length"] = zone.length
         
-        # 실시간 위치 정보 병합 (Movement Simulator가 실행 중일 때)
-        if movement_simulator:
-            pos_info = movement_simulator.get_basket_position(basket_copy["basket_id"])
-            if pos_info:
-                basket_copy["position_meters"] = pos_info.get("position_meters", 0)
-                basket_copy["progress_percent"] = pos_info.get("progress_percent", 0)
+        # 실시간 위치 정보 병합 (어댑터를 통해)
+        if sensor_adapter:
+            movement_sim = sensor_adapter.get_movement_simulator()
+            if movement_sim:
+                pos_info = movement_sim.get_basket_position(basket_copy["basket_id"])
+                if pos_info:
+                    basket_copy["position_meters"] = pos_info.get("position_meters", 0)
+                    basket_copy["progress_percent"] = pos_info.get("progress_percent", 0)
                 
         enriched_baskets.append(basket_copy)
     stats = basket_pool.get_statistics()
@@ -611,8 +604,10 @@ async def get_basket(basket_id: str):
 @app.get("/baskets/movements")
 async def get_basket_movements():
     """현재 이동 중인 바스켓들의 실시간 위치 정보"""
-    if movement_simulator:
-        return movement_simulator.get_all_positions()
+    if sensor_adapter:
+        movement_sim = sensor_adapter.get_movement_simulator()
+        if movement_sim:
+            return movement_sim.get_all_positions()
     return []
 
 # ============ 센서 시뮬레이터 제어 API ============
@@ -630,9 +625,8 @@ async def start_simulator():
         }
     
     try:
-        sensor_generator.start()
-        if movement_simulator:
-            movement_simulator.start()
+        if sensor_adapter:
+            sensor_adapter.start()
         simulator_running = True
         return {
             "status": "started",
@@ -668,9 +662,8 @@ async def stop_simulator(request: Request):
         return result
     
     try:
-        sensor_generator.stop()
-        if movement_simulator:
-            movement_simulator.stop()
+        if sensor_adapter:
+            sensor_adapter.stop()
         simulator_running = False
         result = {
             "status": "stopped",
@@ -695,11 +688,49 @@ async def get_simulator_status():
     if hasattr(consumer, 'latest_events') and consumer.latest_events:
         latest_time = consumer.latest_events[-1].get("timestamp")
 
+    # 어댑터를 통해 상태 정보 가져오기
+    adapter_status = {}
+    if sensor_adapter:
+        adapter_status = sensor_adapter.get_status()
+
     return {
         "running": simulator_running,
         "events_received": consumer.get_event_count(),
-        "latest_event_time": latest_time
+        "latest_event_time": latest_time,
+        "adapter_type": type(sensor_adapter).__name__ if sensor_adapter else None,
+        **adapter_status  # line_speed_zones 등 어댑터별 상태 정보 병합
     }
+
+@app.post("/simulator/reset")
+async def reset_simulator():
+    """시뮬레이션 초기화 - 어댑터를 통해 리셋"""
+    global basket_pool, sensor_adapter
+    
+    if not basket_pool:
+        return {
+            "status": "error",
+            "message": "Basket pool not initialized"
+        }
+    
+    try:
+        # 어댑터의 리셋 메서드 호출
+        if sensor_adapter:
+            sensor_adapter.reset()
+        
+        stats = basket_pool.get_statistics()
+        print(f"[시뮬레이션 초기화] 어댑터 리셋 완료: {stats}")
+        
+        return {
+            "status": "success",
+            "message": "시뮬레이션이 초기화되었습니다.",
+            "statistics": stats
+        }
+    except Exception as e:
+        print(f"[시뮬레이션 초기화] 오류: {e}")
+        return {
+            "status": "error",
+            "message": f"초기화 실패: {str(e)}"
+        }
 
 if __name__ == "__main__":
     import uvicorn

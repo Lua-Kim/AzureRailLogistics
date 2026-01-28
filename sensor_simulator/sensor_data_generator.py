@@ -82,9 +82,9 @@ class SensorDataGenerator:
         """센서 데이터 생성 시작"""
         if self.is_running:
             return
-        
+
         self.is_running = True
-        
+
         # basket_movement 시작 (내부 생성된 경우에만 제어)
         if self.basket_movement and not self.basket_movement.is_running:
             # 외부에서 주입된 경우 이미 실행 중일 수 있으므로 체크
@@ -203,10 +203,20 @@ class SensorDataGenerator:
                 
                 # [최적화] 미리 분류된 바스켓 위치 목록에서만 검색 (훨씬 빠름)
                 signal = False
+                detected_position = None
                 for b_pos in line_basket_positions:
                     if abs(b_pos - sensor_pos) <= DETECTION_RANGE:
                         signal = True
+                        detected_position = b_pos
                         break
+                
+                # 센서 위치에서의 속도 계수 조회
+                speed_modifier = 1.0
+                if self.basket_movement and detected_position is not None:
+                    try:
+                        speed_modifier = self.basket_movement._get_speed_at_position(line_id, detected_position)
+                    except Exception:
+                        speed_modifier = 1.0
                 
                 sensor_id = f"{line_id}-S{i+1:03d}"
                 
@@ -216,7 +226,7 @@ class SensorDataGenerator:
                     "sensor_id": sensor_id,
                     "signal": signal,
                     "timestamp": timestamp,
-                    "speed": 50.0 if signal else 0.0
+                    "speed": 50.0 * speed_modifier if signal else 0.0
                 }
                 events.append(event)
                 

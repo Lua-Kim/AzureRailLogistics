@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
-import { Play, Pause, RefreshCw, Truck, PlusCircle } from 'lucide-react';
+import { Play, Pause, RotateCcw, Truck, PlusCircle } from 'lucide-react';
 import axios from 'axios';
 
 const PageContainer = styled.div`
@@ -138,6 +138,22 @@ const LineTrack = styled.div`
   border: 1px solid ${props => props.theme.colors.border};
 `;
 
+const SpeedSegment = styled.div`
+  position: absolute;
+  top: 0;
+  left: ${props => props.$left}%;
+  width: ${props => props.$width}%;
+  height: 100%;
+  background: ${props => {
+    const speed = props.$speedModifier || 1.0;
+    if (speed < 0.8) return 'rgba(251, 191, 36, 0.4)'; // 느림 - 노랑
+    if (speed > 1.2) return 'rgba(16, 185, 129, 0.4)'; // 빠름 - 녹색
+    return 'transparent'; // 보통
+  }};
+  pointer-events: none;
+  z-index: 1;
+`;
+
 const SensorDot = styled.div`
   position: absolute;
   top: 50%;
@@ -156,9 +172,13 @@ const Basket = styled.div`
   top: 50%;
   left: ${props => props.$position}%;
   transform: translateY(-50%);
-  width: 24px;
+  width: ${props => props.$width || 0.5}%;  /* 실제 비율로 계산 */
+  min-width: 12px;  /* 최소 시각적 크기 */
   height: 24px;
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  background: linear-gradient(135deg, 
+    ${props => props.$isBottleneck ? '#ef4444' : '#3b82f6'}, 
+    ${props => props.$isBottleneck ? '#dc2626' : '#2563eb'});
+  border: ${props => props.$isBottleneck ? '2px solid #dc2626' : 'none'};
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -167,13 +187,17 @@ const Basket = styled.div`
   font-size: 10px;
   font-weight: 700;
   transition: all 0.1s linear;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+  box-shadow: ${props => props.$isBottleneck 
+    ? '0 0 12px rgba(239, 68, 68, 0.8)' 
+    : '0 2px 8px rgba(59, 130, 246, 0.4)'};
   z-index: 10;
   cursor: pointer;
 
   &:hover {
     transform: translateY(-50%) scale(1.2);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.6);
+    box-shadow: ${props => props.$isBottleneck 
+      ? '0 0 16px rgba(239, 68, 68, 1)' 
+      : '0 4px 12px rgba(59, 130, 246, 0.6)'};
   }
 `;
 
@@ -186,6 +210,41 @@ const BasketInfo = styled.div`
   color: ${props => props.theme.colors.text.muted};
   white-space: nowrap;
   pointer-events: none;
+`;
+
+const GuidePanel = styled.div`
+  background: linear-gradient(135deg, ${props => props.theme.colors.surface} 0%, ${props => props.theme.colors.surfaceHighlight} 100%);
+  border: 1px solid ${props => props.theme.colors.border};
+  border-radius: 12px;
+  padding: 16px 20px;
+  display: flex;
+  gap: 32px;
+  align-items: center;
+  flex-wrap: wrap;
+`;
+
+const GuideTitle = styled.div`
+  font-size: 13px;
+  font-weight: 900;
+  color: ${props => props.theme.colors.text.main};
+  margin-bottom: 8px;
+`;
+
+const GuideItem = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: ${props => props.theme.colors.text.muted};
+`;
+
+const ColorBox = styled.div`
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  background: ${props => props.$color};
+  border: 1px solid ${props => props.theme.colors.border};
+  flex-shrink: 0;
 `;
 
 const Stats = styled.div`
@@ -223,23 +282,27 @@ const BasketVisualizationPage = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [basketCount, setBasketCount] = useState(5);
+  const [lineSpeedZones, setLineSpeedZones] = useState({});
 
   const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
   const fetchData = async () => {
     try {
       setIsLoading(true);
-      const [zonesRes, basketsRes] = await Promise.all([
+      const [zonesRes, basketsRes, statusRes] = await Promise.all([
         axios.get(`${API_BASE_URL}/zones`),
         axios.get(`${API_BASE_URL}/baskets`),
+        axios.get(`${API_BASE_URL}/simulator/status`),
       ]);
 
       const zonesData = zonesRes.data || [];
       const basketsData = basketsRes.data;
       const baskets = basketsData.baskets || (Array.isArray(basketsData) ? basketsData : []);
+      const speedZones = statusRes.data?.line_speed_zones || {};
 
       setZones(zonesData);
       setBaskets(baskets);
+      setLineSpeedZones(speedZones);
     } catch (err) {
       console.error('데이터 조회 실패:', err);
     } finally {
@@ -304,6 +367,17 @@ const BasketVisualizationPage = () => {
     }
   };
 
+  const handleReset = async () => {
+    try {
+      await axios.post(`${API_BASE_URL}/simulator/reset`);
+      fetchData(); // 즉시 데이터 갱신
+      alert('시뮬레이션이 초기화되었습니다.');
+    } catch (error) {
+      console.error('초기화 실패:', error);
+      alert('초기화 중 오류가 발생했습니다.');
+    }
+  };
+
   useEffect(() => {
     fetchData();
     
@@ -326,6 +400,7 @@ const BasketVisualizationPage = () => {
   const stats = {
     totalBaskets: baskets.filter(b => b.status !== 'available').length,
     inTransit: baskets.filter(b => b.status === 'moving' || b.status === 'in_transit').length,
+    stopped: baskets.filter(b => b.status === 'stopped').length,
     arrived: baskets.filter(b => b.status === 'arrived').length,
     available: baskets.filter(b => b.status === 'available').length,
   };
@@ -356,12 +431,40 @@ const BasketVisualizationPage = () => {
             {autoRefresh ? <Pause size={16} /> : <Play size={16} />}
             {autoRefresh ? '일시 정지' : '재개'}
           </Button>
-          <Button $variant="primary" onClick={fetchData} disabled={isLoading}>
-            <RefreshCw size={16} style={{ animation: isLoading ? 'spin 1s linear infinite' : 'none' }} />
-            새로고침
+          <Button onClick={handleReset}>
+            <RotateCcw size={16} />
+            초기화
           </Button>
         </Controls>
       </Header>
+
+      <GuidePanel>
+        <div>
+          <GuideTitle>📊 시각화 가이드</GuideTitle>
+          <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
+            <GuideItem>
+              <ColorBox $color="rgba(251, 191, 36, 0.5)" />
+              <span><strong>느린 구간</strong> (0.5x 속도)</span>
+            </GuideItem>
+            <GuideItem>
+              <ColorBox $color="rgba(229, 231, 235, 1)" />
+              <span><strong>보통 구간</strong> (1.0x 속도)</span>
+            </GuideItem>
+            <GuideItem>
+              <ColorBox $color="rgba(16, 185, 129, 0.5)" />
+              <span><strong>빠른 구간</strong> (1.5x 속도)</span>
+            </GuideItem>
+            <GuideItem>
+              <ColorBox $color="linear-gradient(135deg, #3b82f6, #2563eb)" />
+              <span><strong>정상 바스켓</strong> (이동 중)</span>
+            </GuideItem>
+            <GuideItem>
+              <ColorBox $color="linear-gradient(135deg, #ef4444, #dc2626)" />
+              <span><strong>병목 바스켓</strong> (정지 상태)</span>
+            </GuideItem>
+          </div>
+        </div>
+      </GuidePanel>
 
       <Stats>
         <StatCard>
@@ -371,6 +474,10 @@ const BasketVisualizationPage = () => {
         <StatCard>
           <StatLabel>이동 중</StatLabel>
           <StatValue style={{ color: '#3b82f6' }}>{stats.inTransit}</StatValue>
+        </StatCard>
+        <StatCard>
+          <StatLabel>정지 (병목)</StatLabel>
+          <StatValue style={{ color: '#ef4444' }}>{stats.stopped}</StatValue>
         </StatCard>
         <StatCard>
           <StatLabel>도착함</StatLabel>
@@ -400,12 +507,27 @@ const BasketVisualizationPage = () => {
                 );
                 const lineLength = line.length || 300;
                 const sensorsPerLine = Math.max(1, Math.floor((zone.sensors || 0) / (lines.length || 1)));
+                const speedSegments = lineSpeedZones[line.line_id] || [];
 
                 return (
                   <div key={line.line_id}>
                     <LineContainer>
                       <LineName>{line.line_id}</LineName>
                       <LineTrack>
+                        {/* 구간별 속도 오버레이 */}
+                        {speedSegments.map((seg, idx) => {
+                          const startPercent = (seg.start / lineLength) * 100;
+                          const widthPercent = ((seg.end - seg.start) / lineLength) * 100;
+                          return (
+                            <SpeedSegment
+                              key={idx}
+                              $left={startPercent}
+                              $width={widthPercent}
+                              $speedModifier={seg.multiplier}
+                              title={`구간 ${idx + 1}: ${seg.multiplier}x`}
+                            />
+                          );
+                        })}
                         {Array.from({ length: sensorsPerLine }).map((_, idx) => {
                           const sensorPosPercent = ((idx + 1) / (sensorsPerLine + 1)) * 100;
                           const isActive = lineBaskets.some(b => 
@@ -423,13 +545,18 @@ const BasketVisualizationPage = () => {
                         {lineBaskets.map((basket) => {
                           // 백엔드에서 계산된 progress_percent 사용
                           const positionPercent = basket.progress_percent || 0;
+                          const isBottleneck = basket.is_bottleneck || basket.status === 'stopped';
+                          // 바스켓 크기를 라인 길이 대비 실제 비율로 계산
+                          const basketWidthPercent = basket.width_cm ? (basket.width_cm / 100 / lineLength) * 100 : 0.5;
                           return (
                             <Basket
                               key={basket.basket_id}
                               $position={Math.min(positionPercent, 95)}
-                              title={`${basket.basket_id} - ${basket.status}`}
+                              $width={basketWidthPercent}
+                              $isBottleneck={isBottleneck}
+                              title={`${basket.basket_id} - ${basket.status}${isBottleneck ? ' (병목)' : ''}\n크기: ${basket.width_cm}cm (${basketWidthPercent.toFixed(2)}%)`}
                             >
-                              {basket.basket_id.split('-').pop()}
+                              {parseInt(basket.basket_id.split('-').pop())}
                             </Basket>
                           );
                         })}
