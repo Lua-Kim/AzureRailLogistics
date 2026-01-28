@@ -1,7 +1,7 @@
 """실제 센서 어댑터 - 실제 센서 시스템 연동 (스켈레톤)"""
 
 from .base import SensorAdapter
-from kafka import KafkaProducer
+# from kafka import KafkaProducer  # Not used in IoT Hub integration
 import json
 from datetime import datetime
 
@@ -22,11 +22,12 @@ class RealSensorAdapter(SensorAdapter):
         self.config = sensor_config
         self.is_running = False
         
-        # Kafka Producer 초기화
-        self.kafka_producer = KafkaProducer(
-            bootstrap_servers=[sensor_config.get("kafka_broker", "localhost:9092")],
-            value_serializer=lambda x: json.dumps(x).encode('utf-8')
-        )
+        # Kafka Producer 초기화 (Not used in IoT Hub integration)
+        # self.kafka_producer = KafkaProducer(
+        #     bootstrap_servers=[sensor_config.get("kafka_broker", "localhost:9092")],
+        #     value_serializer=lambda x: json.dumps(x).encode('utf-8')
+        # )
+        self.kafka_producer = None
         
         print(f"[RealSensorAdapter] 초기화: {sensor_config.get('gateway_url')}")
     

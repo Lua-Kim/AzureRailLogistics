@@ -1,8 +1,9 @@
 import time
 import json
 import threading
+import os
 from datetime import datetime
-from kafka import KafkaProducer
+from azure.iot.device import IoTHubModuleClient, Message
 
 # 센서_시뮬레이터의 database 모듈 import
 try:
@@ -25,10 +26,11 @@ class SensorDataGenerator:
             basket_pool: BasketPool 인스턴스 (선택사항)
             basket_movement: 외부에서 주입된 BasketMovement 인스턴스 (선택사항)
         """
-        self.producer = KafkaProducer(
-            bootstrap_servers=['localhost:9092'],
-            value_serializer=lambda x: json.dumps(x).encode('utf-8')
-        )
+        # IoT Hub Module Client 생성 (IoT Edge에서 실행)
+        self.iot_client = IoTHubModuleClient.create_from_edge_environment()
+        self.iot_client.connect()
+        print("[센서 시뮬레이션] IoT Edge Module Client 연결 완료")
+        
         self.is_running = False
         self.zones = {}
         self.stream_thread = None
@@ -111,7 +113,7 @@ class SensorDataGenerator:
         print("[센서 시뮬레이션] 데이터 스트리밍 중지")
 
     def _stream_sensor_data(self):
-        """주기적으로 센서 데이터를 생성하여 Kafka로 전송"""
+        """주기적으로 센서 데이터를 생성하여 IoT Hub로 전송"""
         while self.is_running:
             start_time = time.time()
             
@@ -123,7 +125,11 @@ class SensorDataGenerator:
                     for event in events:
                         if event.get("signal"):
                             active_count += 1
-                        self.producer.send('sensor-events', event)
+                        # IoT Hub로 메시지 전송
+                        message = Message(json.dumps(event))
+                        message.content_type = "application/json"
+                        message.content_encoding = "utf-8"
+                        self.iot_client.send_message(message)
                         events_sent += 1
                 
                 # print(f"[센서 시뮬레이션] 전송: 총 {events_sent}개 이벤트 (감지됨: {active_count}개)")

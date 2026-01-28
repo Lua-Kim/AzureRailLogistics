@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from kafka_consumer import SensorEventConsumer
+from eventhub_consumer import SensorEventConsumer
 from database import init_data_db, data_db, logis_data_db
 from models import LogisticsZone, LogisticsLine
 from schemas import (
@@ -17,12 +17,11 @@ import threading
 import random
 import asyncio
 
-# sensor_simulator 경로 추가
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'sensor_simulator'))
+# 백엔드 폴더에 있는 basket_manager 임포트
 from basket_manager import BasketPool
 
-# sensor_adapter 경로 추가
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+# sensor_adapter 경로 추가 (프로젝트 루트의 sensor_adapter)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from sensor_adapter import create_adapter
 
 app = FastAPI(title="Azure Rail Logistics Backend")
@@ -685,8 +684,11 @@ async def stop_simulator(request: Request):
 async def get_simulator_status():
     """센서 시뮬레이션 상태 조회"""
     latest_time = None
+    events_count = 0
     if hasattr(consumer, 'latest_events') and consumer.latest_events:
-        latest_time = consumer.latest_events[-1].get("timestamp")
+        events_count = len(consumer.latest_events)
+        if events_count > 0:
+            latest_time = consumer.latest_events[-1].get("timestamp")
 
     # 어댑터를 통해 상태 정보 가져오기
     adapter_status = {}
@@ -695,10 +697,10 @@ async def get_simulator_status():
 
     return {
         "running": simulator_running,
-        "events_received": consumer.get_event_count(),
+        "events_received": events_count,
         "latest_event_time": latest_time,
         "adapter_type": type(sensor_adapter).__name__ if sensor_adapter else None,
-        **adapter_status  # line_speed_zones 등 어댑터별 상태 정보 병합
+        "line_speed_zones": adapter_status.get("line_speed_zones", {}) if adapter_status else {}
     }
 
 @app.post("/simulator/reset")
