@@ -47,3 +47,5 @@ __pycache__/
 
 # Docker configuration
 docker-compose.yml
+# Deployment configuration with secrets
+deployment.json
