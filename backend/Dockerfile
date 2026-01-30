@@ -1,5 +1,6 @@
 # Backend Service Dockerfile for Azure IoT Edge
 FROM python:3.11-slim
+LABEL build_marker="backend_dockerfile_no_sensor_adapter"
 
 WORKDIR /app
 
@@ -15,8 +16,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY backend/ .
-COPY sensor_adapter /app/sensor_adapter
 COPY sensor_simulator /app/sensor_simulator
+
+# Clean Python cache
+RUN find . -type d -name __pycache__ -exec rm -r {} + 2>/dev/null || true
 
 # Expose port
 EXPOSE 8000

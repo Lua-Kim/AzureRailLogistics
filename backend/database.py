@@ -1,20 +1,34 @@
 import os
+import time
 from dotenv import load_dotenv
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.exc import OperationalError
 
 # .env 파일 로드 (프로젝트 루트에서)
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-# PostgreSQL 연결 설정 (환경 변수에서만 읽음)
-DATABASE_URL = os.getenv("DATABASE_URL")
+# PostgreSQL 연결 설정 (Azure PostgreSQL만 사용)
+AZ_POSTGRE_DATABASE_URL = os.getenv("AZ_POSTGRE_DATABASE_URL")
 
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL 환경 변수가 설정되지 않았습니다. .env 파일을 확인하세요.")
+# Azure PostgreSQL 반드시 필요
+if not AZ_POSTGRE_DATABASE_URL:
+    raise ValueError("❌ AZ_POSTGRE_DATABASE_URL 환경 변수가 설정되지 않았습니다. deployment.json을 확인하세요.")
 
-engine = create_engine(DATABASE_URL, echo=False, pool_size=10, max_overflow=20, pool_pre_ping=True)
+print("[DB] ✅ Azure PostgreSQL에만 연결합니다.")
+print(f"[DB] Server: {AZ_POSTGRE_DATABASE_URL.split('@')[1].split('/')[0]}")
+
+# Azure PostgreSQL은 SSL 필수
+engine = create_engine(
+    AZ_POSTGRE_DATABASE_URL, 
+    echo=False, 
+    pool_size=10, 
+    max_overflow=20, 
+    pool_pre_ping=True,
+    connect_args={"sslmode": "require"}
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -26,9 +40,17 @@ def data_db():
     finally:
         db.close()
 
-def init_data_db():
-    """데이터베이스 초기화 (테이블 생성만)"""
-    Base.metadata.create_all(bind=engine)
+def init_data_db(retries: int = 10, delay_seconds: int = 3):
+    """데이터베이스 초기화 (테이블 생성만). DB 준비 대기 포함."""
+    for attempt in range(1, retries + 1):
+        try:
+            Base.metadata.create_all(bind=engine)
+            return
+        except OperationalError as e:
+            if attempt == retries:
+                raise
+            print(f"[DB] 연결 실패 ({attempt}/{retries}). {delay_seconds}s 후 재시도...")
+            time.sleep(delay_seconds)
 
 
 # ============ 물류 데이터베이스 CRUD 클래스 ============
@@ -106,6 +128,13 @@ class logis_data_db:
         db.delete(db_zone)
         db.commit()
         return zone_id
+    
+    @staticmethod
+    def delete_all_zones(db):
+        """모든 존 삭제 (프리셋 적용 시 사용)"""
+        from models import LogisticsZone
+        db.query(LogisticsZone).delete()
+        db.commit()
     
     # ============ 라인 (Line) CRUD ============
     
@@ -188,3 +217,41 @@ class logis_data_db:
         from models import LogisticsLine
         db.query(LogisticsLine).filter(LogisticsLine.zone_id == zone_id).delete()
         db.commit()
+    
+    @staticmethod
+    def delete_all_lines(db):
+        """모든 라인 삭제 (프리셋 적용 시 사용)"""
+        from models import LogisticsLine
+        db.query(LogisticsLine).delete()
+        db.commit()    
+    # ============ 프리셋 조회 (Azure PostgreSQL) ============
+    
+    @staticmethod
+    def get_current_preset(db):
+        """현재 적용된 프리셋 정보 조회 (현재 zones/lines로부터)"""
+        from models import LogisticsZone
+        from sqlalchemy.orm import joinedload
+        
+        zones = db.query(LogisticsZone).options(joinedload(LogisticsZone.zone_lines)).all()
+        
+        if not zones:
+            return None
+        
+        preset_info = {
+            "total_zones": len(zones),
+            "total_lines": sum(len(z.zone_lines) if z.zone_lines else 0 for z in zones),
+            "total_sensors": sum(z.sensors or 0 for z in zones),
+            "total_length_m": sum(z.length or 0 for z in zones),
+            "zones": [
+                {
+                    "id": z.zone_id,
+                    "name": z.name,
+                    "lines": z.lines or 0,
+                    "length": z.length or 0,
+                    "sensors": z.sensors or 0
+                }
+                for z in zones
+            ]
+        }
+        
+        return preset_info

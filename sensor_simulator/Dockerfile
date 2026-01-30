@@ -9,12 +9,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY sensor_simulator/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY sensor_simulator/ .
-COPY sensor_adapter /app/sensor_adapter
+COPY . .
 
-# Run the simulator
-CMD ["python", "sensor_data_generator.py"]
+# Expose API port
+EXPOSE 5001
+
+# Run the API server (which manages the simulator)
+CMD ["python", "api_server.py"]

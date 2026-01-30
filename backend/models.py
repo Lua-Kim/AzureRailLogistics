@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -37,6 +37,25 @@ class LogisticsLine(Base):
     
     # 관계 설정
     zone = relationship("LogisticsZone", back_populates="zone_lines")
+    
+    class Config:
+        from_attributes = True
+
+
+class SensorEvent(Base):
+    """센서 이벤트 데이터 (시계열)"""
+    __tablename__ = "sensor_events"
+    
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    timestamp = Column(DateTime, index=True, nullable=False)  # 이벤트 발생 시간
+    zone_id = Column(String, index=True, nullable=False)      # 구획 ID
+    basket_id = Column(String, index=True, nullable=True)     # 바스켓 ID
+    sensor_id = Column(String, nullable=False)                # 센서 ID
+    signal = Column(Boolean, default=False)                   # 신호 감지 여부
+    speed = Column(Float, default=0.0)                        # 속도 (%)
+    position_x = Column(Float, nullable=True)                 # X 좌표 (m)
+    position_y = Column(Float, nullable=True)                 # Y 좌표 (m)
+    created_at = Column(DateTime, default=datetime.utcnow)
     
     class Config:
         from_attributes = True

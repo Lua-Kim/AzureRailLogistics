@@ -10,6 +10,7 @@ const PageContainer = styled.div`
   padding: 24px;
   background-color: ${props => props.theme.colors.background};
   min-height: 100vh;
+  position: relative;
 `;
 
 const Header = styled.div`
@@ -247,6 +248,38 @@ const ColorBox = styled.div`
   flex-shrink: 0;
 `;
 
+const RuleItem = styled.div`
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background-color: ${props => props.theme.colors.surface};
+  border-radius: 8px;
+  border: 1px solid ${props => props.theme.colors.border};
+`;
+
+const RuleNumber = styled.div`
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-top: 2px;
+`;
+
+const RuleText = styled.div`
+  font-size: 11px;
+  color: ${props => props.theme.colors.text.muted};
+  line-height: 1.6;
+  flex: 1;
+`;
+
 const Stats = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -283,26 +316,46 @@ const BasketVisualizationPage = () => {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [basketCount, setBasketCount] = useState(5);
   const [lineSpeedZones, setLineSpeedZones] = useState({});
+  const [lineCapacities, setLineCapacities] = useState({}); // 라인 용량 정보 상태 추가
+  const [bottlenecksByZone, setBottlenecksByZone] = useState({}); // 병목 정보 상태 추가
 
   const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
   const fetchData = async () => {
     try {
       setIsLoading(true);
-      const [zonesRes, basketsRes, statusRes] = await Promise.all([
+      const [zonesRes, basketsRes, statusRes, bottlenecksRes] = await Promise.all([
         axios.get(`${API_BASE_URL}/zones`),
         axios.get(`${API_BASE_URL}/baskets`),
         axios.get(`${API_BASE_URL}/simulator/status`),
+        axios.get(`${API_BASE_URL}/bottlenecks`),
       ]);
 
-      const zonesData = zonesRes.data || [];
+      // zones API가 이제 {zones: [], line_capacities: {}} 형태로 반환
+      const zonesData = zonesRes.data?.zones || zonesRes.data || [];
+      const capacitiesData = zonesRes.data?.line_capacities || {};
       const basketsData = basketsRes.data;
       const baskets = basketsData.baskets || (Array.isArray(basketsData) ? basketsData : []);
       const speedZones = statusRes.data?.line_speed_zones || {};
+      
+      // 병목 데이터 처리
+      const bottlenecks = bottlenecksRes.data || {};
+      const bottlenecksMap = {};
+      if (Array.isArray(bottlenecks)) {
+        bottlenecks.forEach(item => {
+          bottlenecksMap[item.zone_id] = item;
+        });
+      } else if (bottlenecks && typeof bottlenecks === 'object') {
+        Object.keys(bottlenecks).forEach(zoneId => {
+          bottlenecksMap[zoneId] = bottlenecks[zoneId];
+        });
+      }
 
       setZones(zonesData);
       setBaskets(baskets);
       setLineSpeedZones(speedZones);
+      setLineCapacities(capacitiesData); // 라인 용량 정보 저장
+      setBottlenecksByZone(bottlenecksMap); // 병목 정보 저장
     } catch (err) {
       console.error('데이터 조회 실패:', err);
     } finally {
@@ -407,6 +460,7 @@ const BasketVisualizationPage = () => {
 
   return (
     <PageContainer>
+
       <Header>
         <Title>
           <Truck size={28} color="#3b82f6" />
@@ -464,6 +518,48 @@ const BasketVisualizationPage = () => {
             </GuideItem>
           </div>
         </div>
+
+        {/* 투입 규칙 섹션 추가 */}
+        <div>
+          <GuideTitle>📝 바스켓 투입 규칙</GuideTitle>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <RuleItem>
+              <RuleNumber>1</RuleNumber>
+              <RuleText>
+                <strong>순차 투입:</strong> 버튼 클릭 시 즉시 투입되지 않고, 
+                <span style={{color: '#3b82f6', fontWeight: 'bold'}}> 대기열</span>에 추가됩니다.
+              </RuleText>
+            </RuleItem>
+            <RuleItem>
+              <RuleNumber>2</RuleNumber>
+              <RuleText>
+                <strong>라인 분산:</strong> 여러 라인이 있을 경우, 
+                <span style={{color: '#10b981', fontWeight: 'bold'}}> 혼잡도가 낮은</span> 라인부터 자동 배분됩니다.
+              </RuleText>
+            </RuleItem>
+            <RuleItem>
+              <RuleNumber>3</RuleNumber>
+              <RuleText>
+                <strong>충돌 방지:</strong> 같은 라인에 
+                <span style={{color: '#f59e0b', fontWeight: 'bold'}}> 0.8초 간격</span>으로 투입되어 충돌을 방지합니다.
+              </RuleText>
+            </RuleItem>
+            <RuleItem>
+              <RuleNumber>4</RuleNumber>
+              <RuleText>
+                <strong>용량 경고:</strong> 라인 용량이 
+                <span style={{color: '#ef4444', fontWeight: 'bold'}}> 80% 이상</span>일 경우 경고 메시지가 표시됩니다.
+              </RuleText>
+            </RuleItem>
+            <RuleItem>
+              <RuleNumber>5</RuleNumber>
+              <RuleText>
+                <strong>구간별 속도:</strong> 바스켓은 각 구간의 속도 계수에 따라 
+                <span style={{color: '#8b5cf6', fontWeight: 'bold'}}> 가변 속도</span>로 이동합니다.
+              </RuleText>
+            </RuleItem>
+          </div>
+        </div>
       </GuidePanel>
 
       <Stats>
@@ -489,6 +585,39 @@ const BasketVisualizationPage = () => {
         </StatCard>
       </Stats>
 
+      {/* 병목 정보 섹션 */}
+      {Object.keys(bottlenecksByZone).length > 0 && (
+        <Stats style={{ marginTop: '20px', backgroundColor: 'rgba(239, 68, 68, 0.05)', padding: '16px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+          <div style={{ gridColumn: '1 / -1', marginBottom: '12px' }}>
+            <StatLabel style={{ color: '#ef4444', fontSize: '12px', fontWeight: '900' }}>⚠️ 병목 감지 정보</StatLabel>
+          </div>
+          {Object.entries(bottlenecksByZone).map(([zoneId, bottleneckData]) => (
+            <StatCard key={zoneId} style={{ borderColor: 'rgba(239, 68, 68, 0.3)' }}>
+              <StatLabel>{zoneId}</StatLabel>
+              <StatValue style={{ color: '#ef4444' }}>
+                {bottleneckData.bottleneck_count || 0}개
+              </StatValue>
+              {bottleneckData.bottleneck_baskets && bottleneckData.bottleneck_baskets.length > 0 && (
+                <div style={{ 
+                  fontSize: '11px', 
+                  color: '#6b7280', 
+                  marginTop: '8px', 
+                  paddingTop: '8px', 
+                  borderTop: '1px solid rgba(0,0,0,0.1)',
+                  textAlign: 'left',
+                  maxHeight: '60px',
+                  overflowY: 'auto'
+                }}>
+                  <strong style={{ color: '#ef4444' }}>병목 바스켓:</strong><br />
+                  {bottleneckData.bottleneck_baskets.slice(0, 5).join(', ')}
+                  {bottleneckData.bottleneck_baskets.length > 5 && ` +${bottleneckData.bottleneck_baskets.length - 5}개`}
+                </div>
+              )}
+            </StatCard>
+          ))}
+        </Stats>
+      )}
+
       <VisualizationContainer>
         {zones.map((zone) => {
           const zoneBaskets = basketsByZone[zone.zone_id]?.baskets || [];
@@ -508,11 +637,54 @@ const BasketVisualizationPage = () => {
                 const lineLength = line.length || 300;
                 const sensorsPerLine = Math.max(1, Math.floor((zone.sensors || 0) / (lines.length || 1)));
                 const speedSegments = lineSpeedZones[line.line_id] || [];
+                
+                // 라인 용량 정보 가져오기
+                const capacity = lineCapacities[line.line_id] || { current: 0, max: 20, percent: 0 };
+                const isNearFull = capacity.percent >= 80;
+                const isMedium = capacity.percent >= 60 && capacity.percent < 80;
 
                 return (
                   <div key={line.line_id}>
                     <LineContainer>
-                      <LineName>{line.line_id}</LineName>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <LineName>{line.line_id}</LineName>
+                        {/* 라인 용량 표시 */}
+                        <div style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '8px',
+                          fontSize: '10px',
+                          fontWeight: '700'
+                        }}>
+                          <span style={{ 
+                            color: isNearFull ? '#ef4444' : isMedium ? '#f59e0b' : '#10b981' 
+                          }}>
+                            {capacity.current}/{capacity.max}
+                          </span>
+                          <div style={{
+                            width: '60px',
+                            height: '6px',
+                            backgroundColor: '#1f2937',
+                            borderRadius: '3px',
+                            overflow: 'hidden',
+                            border: '1px solid #374151'
+                          }}>
+                            <div style={{
+                              width: `${Math.min(capacity.percent, 100)}%`,
+                              height: '100%',
+                              backgroundColor: isNearFull ? '#ef4444' : isMedium ? '#f59e0b' : '#10b981',
+                              transition: 'width 0.3s ease'
+                            }} />
+                          </div>
+                          <span style={{ 
+                            color: isNearFull ? '#ef4444' : isMedium ? '#f59e0b' : '#6b7280',
+                            minWidth: '35px',
+                            textAlign: 'right'
+                          }}>
+                            {capacity.percent.toFixed(0)}%
+                          </span>
+                        </div>
+                      </div>
                       <LineTrack>
                         {/* 구간별 속도 오버레이 */}
                         {speedSegments.map((seg, idx) => {

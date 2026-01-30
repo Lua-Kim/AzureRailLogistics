@@ -79,6 +79,8 @@ class BasketPool:
             basket["zone_id"] = zone_id
             basket["line_id"] = line_id
             basket["destination"] = destination
+            basket["position_m"] = 0.0  # 입구에서 시작 (0m)
+            basket["progress_percent"] = 0.0
             basket["assigned_at"] = datetime.now().isoformat()
             return basket
 
@@ -123,6 +125,16 @@ class BasketPool:
             basket["motion_state"] = motion_state
             if is_bottleneck is not None:
                 basket["is_bottleneck"] = is_bottleneck
+            basket["updated_at"] = datetime.now().isoformat()
+
+    def update_basket_position(self, basket_id: str, position_m: float, progress_percent: float):
+        """바스켓 위치 업데이트 (미터, 진행률)"""
+        with self.lock:
+            if basket_id not in self.baskets:
+                return
+            basket = self.baskets[basket_id]
+            basket["position_m"] = position_m
+            basket["progress_percent"] = progress_percent
             basket["updated_at"] = datetime.now().isoformat()
 
     def expand_pool(self, additional_count: int):

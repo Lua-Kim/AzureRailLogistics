@@ -732,25 +732,35 @@ const LogisticsRailSettingPage = () => {
 
   const handlePresetClick = async (presetKey) => {
     // 확인 다이얼로그
-    if (!window.confirm('물류센터 시설정보가 변경됩니다. 확인하시겠습니까?')) {
+    if (!window.confirm('물류센터 시설정보가 변경됩니다. 시뮬레이션이 재시작됩니다. 확인하시겠습니까?')) {
       return;
     }
 
-    const newZones = presets[presetKey];
-    setZones(newZones);
-    
     try {
-      // 일괄 저장 API를 사용하여 기존 데이터를 덮어쓰고 새 프리셋으로 교체
-      await apiService.setZonesBatch(newZones.map(z => ({
-        zone_id: z.id,
-        name: z.name,
-        lines: z.lines,
-        length: z.length,
-        sensors: z.sensors
-      })));
-      console.log(`프리셋 '${presetKey}' 로드 완료`);
+      // 새 API 사용: 백엔드에서 프리셋 적용 (zones/lines 교체 + 센서 어댑터 재시작)
+      const response = await apiService.applyPreset(presetKey);
+      
+      if (response.status === 'success') {
+        console.log(`✅ 프리셋 '${presetKey}' 적용 완료:`, response);
+        alert(`${response.message}\n\n생성된 존: ${response.zones_created}개\n생성된 라인: ${response.lines_created}개\n생성된 센서: ${response.sensors_created}개`);
+        
+        // UI 업데이트: DB에서 최신 zones 다시 로드
+        const data = await apiService.getZonesConfig();
+        if (data && data.length > 0) {
+          setZones(data.map(z => ({
+            id: z.zone_id,
+            name: z.name,
+            lines: z.lines,
+            length: z.length,
+            sensors: z.sensors
+          })));
+        }
+      } else {
+        alert('프리셋 적용 실패: ' + (response.message || '알 수 없는 오류'));
+      }
     } catch (error) {
-      console.error('프리셋 로드 중 오류:', error);
+      console.error('프리셋 적용 중 오류:', error);
+      alert('프리셋 적용 중 오류가 발생했습니다. 콘솔을 확인하세요.');
     }
   };
 

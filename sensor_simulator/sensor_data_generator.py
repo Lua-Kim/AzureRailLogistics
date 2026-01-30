@@ -3,7 +3,11 @@ import json
 import threading
 import os
 from datetime import datetime
-from azure.iot.device import IoTHubModuleClient, Message
+from azure.iot.device import IoTHubDeviceClient, Message
+from azure.identity import DefaultAzureCredential
+from azure.core.credentials import AccessToken
+import ssl
+import urllib.parse
 
 # 센서_시뮬레이터의 database 모듈 import
 try:
@@ -26,10 +30,34 @@ class SensorDataGenerator:
             basket_pool: BasketPool 인스턴스 (선택사항)
             basket_movement: 외부에서 주입된 BasketMovement 인스턴스 (선택사항)
         """
-        # IoT Hub Module Client 생성 (IoT Edge에서 실행)
-        self.iot_client = IoTHubModuleClient.create_from_edge_environment()
-        self.iot_client.connect()
-        print("[센서 시뮬레이션] IoT Edge Module Client 연결 완료")
+        # Managed Identity를 사용한 IoT Hub 연결
+        try:
+            # 방법 1: 연결 문자열이 있으면 사용
+            device_connection_string = os.getenv("IOT_HUB_DEVICE_CONNECTION_STRING")
+            if device_connection_string:
+                print("[센서 시뮬레이션] 연결 문자열로 IoT Hub 연결 시도...")
+                self.iot_client = IoTHubDeviceClient.create_from_connection_string(device_connection_string)
+            else:
+                # 방법 2: Managed Identity 사용
+                print("[센서 시뮬레이션] Managed Identity로 IoT Hub 연결 시도...")
+                credential = DefaultAzureCredential()
+                iothub_hostname = os.getenv("IOT_HUB_HOSTNAME", "LogisticsIoTHub.azure-devices.net")
+                device_id = os.getenv("IOT_DEVICE_ID", "logistics-sensor-device")
+                
+                self.iot_client = IoTHubDeviceClient.create_from_azure_credential(
+                    iothub_hostname=iothub_hostname,
+                    device_id=device_id,
+                    credential=credential
+                )
+            
+            self.iot_client.connect()
+            print("[센서 시뮬레이션] ✅ IoT Hub 연결 성공")
+            
+        except Exception as e:
+            print(f"[센서 시뮬레이션] ❌ IoT Hub 연결 실패: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         self.is_running = False
         self.zones = {}
@@ -47,6 +75,70 @@ class SensorDataGenerator:
             self._initialize_basket_movement()
         elif self.basket_movement:
             print("[센서 시뮬레이션] 외부 BasketMovement 인스턴스 연결됨")
+    
+    def _setup_mqtt_direct_connection(self, device_connection_string):
+        """MQTT Direct 연결 (SSL 검증 우회)"""
+        import paho.mqtt.client as mqtt
+        from azure.iot.device.common import connection_string_parser
+        
+        # 연결 문자열 파싱
+        conn_dict = connection_string_parser.parse_connection_string(device_connection_string)
+        hostname = conn_dict.get("HostName")
+        device_id = conn_dict.get("DeviceId")
+        shared_key = conn_dict.get("SharedAccessKey")
+        
+        # device_id 저장 (나중에 MQTT 토픽 구성에 사용)
+        self.mqtt_device_id = device_id
+        
+        # MQTT 클라이언트 생성
+        self.mqtt_client = mqtt.Client(client_id=device_id)
+        
+        # SSL 검증 비활성화
+        self.mqtt_client.tls_set(
+            ca_certs=None,
+            certfile=None,
+            keyfile=None,
+            cert_reqs=ssl.CERT_NONE,
+            tls_version=ssl.PROTOCOL_TLSv1_2,
+            ciphers=None
+        )
+        self.mqtt_client.tls_insecure_set(True)  # SSL 검증 비활성화
+        
+        # 사용자명과 비밀번호 설정
+        username = f"{hostname}/{device_id}/?api-version=2021-04-12"
+        self.mqtt_client.username_pw_set(username, shared_key)
+        
+        # 콜백 등록
+        self.mqtt_client.on_connect = self._on_mqtt_connect
+        self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
+        
+        # 연결
+        print(f"[센서 시뮬레이션] MQTT 연결 중: {hostname}:8883")
+        self.mqtt_client.connect(hostname, 8883, keepalive=60)
+        self.mqtt_client.loop_start()
+        
+        # 연결 대기
+        import time
+        for _ in range(30):  # 최대 30초 대기
+            if hasattr(self, 'mqtt_connected') and self.mqtt_connected:
+                return
+            time.sleep(1)
+        
+        raise TimeoutError("MQTT 연결 타임아웃")
+    
+    def _on_mqtt_connect(self, client, userdata, flags, rc):
+        """MQTT 연결 콜백"""
+        if rc == 0:
+            print("[센서 시뮬레이션] ✅ MQTT 연결 성공")
+            self.mqtt_connected = True
+        else:
+            print(f"[센서 시뮬레이션] ❌ MQTT 연결 실패 (코드: {rc})")
+            self.mqtt_connected = False
+    
+    def _on_mqtt_disconnect(self, client, userdata, rc):
+        """MQTT 연결 해제 콜백"""
+        print(f"[센서 시뮬레이션] MQTT 연결 해제 (코드: {rc})")
+        self.mqtt_connected = False
     
     def _load_zones_from_db(self):
         """데이터베이스에서 ZONES 설정 로드"""
@@ -114,8 +206,11 @@ class SensorDataGenerator:
 
     def _stream_sensor_data(self):
         """주기적으로 센서 데이터를 생성하여 IoT Hub로 전송"""
+        print("[센서 시뮬레이션] 메시지 스트리밍 스레드 시작됨")
+        send_cycle = 0
         while self.is_running:
             start_time = time.time()
+            send_cycle += 1
             
             try:
                 events_sent = 0
@@ -125,14 +220,29 @@ class SensorDataGenerator:
                     for event in events:
                         if event.get("signal"):
                             active_count += 1
-                        # IoT Hub로 메시지 전송
-                        message = Message(json.dumps(event))
-                        message.content_type = "application/json"
-                        message.content_encoding = "utf-8"
-                        self.iot_client.send_message(message)
-                        events_sent += 1
+                        try:
+                            # IoT Hub로 메시지 전송
+                            message_json = json.dumps(event)
+                            
+                            # IoTHubDeviceClient 사용
+                            if hasattr(self, 'iot_client') and self.iot_client:
+                                message = Message(message_json)
+                                message.content_type = "application/json"
+                                message.content_encoding = "utf-8"
+                                self.iot_client.send_message(message)
+                            # MQTT Direct 사용
+                            elif hasattr(self, 'mqtt_client') and self.mqtt_client:
+                                topic = f"devices/{self.mqtt_device_id}/messages/events/"
+                                self.mqtt_client.publish(topic, message_json, qos=1)
+                            
+                            events_sent += 1
+                        except Exception as send_error:
+                            print(f"[센서 시뮬레이션] ❌ 메시지 전송 오류 (zone={zone_id}): {type(send_error).__name__}: {send_error}")
                 
-                # print(f"[센서 시뮬레이션] 전송: 총 {events_sent}개 이벤트 (감지됨: {active_count}개)")
+                # 주기적으로 로그 출력 (매 5번째 사이클마다)
+                if send_cycle % 5 == 0:
+                    print(f"[센서 시뮬레이션] ✅ 전송 사이클 #{send_cycle}: 총 {events_sent}개 이벤트 (감지됨: {active_count}개)")
+
                 
             except Exception as e:
                 print(f"[센서 시뮬레이션] 전송 오류: {e}")

@@ -28,7 +28,7 @@ if ($LASTEXITCODE -ne 0) {
 # 백엔드 이미지 빌드
 Write-Host ""
 Write-Host "백엔드 이미지 빌드 중..." -ForegroundColor Yellow
-docker build -t ${ACR_LOGIN_SERVER}/logistics-backend:${Tag} -f backend/Dockerfile backend/
+docker build -t ${ACR_LOGIN_SERVER}/logistics-backend:${Tag} -f backend/Dockerfile .
 if ($LASTEXITCODE -ne 0) {
     Write-Host "백엔드 이미지 빌드 실패!" -ForegroundColor Red
     exit 1

@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// API 베이스 URL
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+// API 베이스 URL - Azure VM의 백엔드 서버 주소
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://20.196.224.42:8000';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -129,6 +129,41 @@ export const apiService = {
     } catch (error) {
       console.error('시뮬레이션 상태 조회 오류:', error);
       return { running: false };
+    }
+  },
+
+  // ========== 프리셋 API ==========
+  
+  // 모든 프리셋 목록 조회
+  getPresets: async () => {
+    try {
+      const response = await api.get('/presets');
+      return response.data;
+    } catch (error) {
+      console.error('프리셋 목록 조회 오류:', error);
+      throw error;
+    }
+  },
+
+  // 특정 프리셋 상세 조회
+  getPresetDetail: async (presetKey) => {
+    try {
+      const response = await api.get(`/presets/${presetKey}`);
+      return response.data;
+    } catch (error) {
+      console.error(`프리셋 ${presetKey} 조회 오류:`, error);
+      throw error;
+    }
+  },
+
+  // 프리셋 적용 (zones/lines 교체)
+  applyPreset: async (presetKey) => {
+    try {
+      const response = await api.post(`/presets/${presetKey}/apply`);
+      return response.data;
+    } catch (error) {
+      console.error(`프리셋 ${presetKey} 적용 오류:`, error);
+      throw error;
     }
   }
 };

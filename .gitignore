@@ -49,3 +49,5 @@ __pycache__/
 docker-compose.yml
 # Deployment configuration with secrets
 deployment.json
+__pycache__/
+document/azure vm ssh.md

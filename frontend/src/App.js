@@ -1,8 +1,9 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
 import styled, { ThemeProvider } from 'styled-components';
-import { Truck, Box, Activity, Sun, Moon, Laptop, Home } from 'lucide-react';
+import { Truck, Box, Activity, Sun, Moon, Laptop, Home, Play, Pause } from 'lucide-react';
+import axios from 'axios';
 import LogisticsRailSettingPage from './LogisticsRailSettingPage';
 import BasketVisualizationPage from './BasketVisualizationPage';
 import VisualizationDebugPage from './VisualizationDebugPage';
@@ -32,6 +33,40 @@ const MainContent = styled.div`
   flex: 1;
   overflow-y: auto;
   position: relative;
+`;
+
+const SimulatorSwitch = styled.button`
+  position: fixed;
+  top: 6px;
+  right: 17px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background-color: ${props => props.$isRunning 
+    ? 'rgba(16, 185, 129, 0.1)' 
+    : 'rgba(239, 68, 68, 0.1)'};
+  color: ${props => props.$isRunning ? '#059669' : '#dc2626'};
+  border: none;
+  border-radius: 0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  z-index: 1000;
+  box-shadow: none;
+
+  &:hover {
+    background-color: ${props => props.$isRunning 
+      ? 'rgba(16, 185, 129, 0.2)' 
+      : 'rgba(239, 68, 68, 0.2)'};
+    transform: scale(1.05);
+  }
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
 `;
 
 const StyledNavLink = styled(NavLink)`
@@ -94,7 +129,35 @@ const Dashboard = () => (
 
 const App = () => {
   const [themeMode, setThemeMode] = useState('dark');
+  const [simulatorRunning, setSimulatorRunning] = useState(true);
   const theme = themeMode === 'light' ? lightTheme : darkTheme;
+  const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
+  // 초기 로드 시 시뮬레이터 상태 확인
+  useEffect(() => {
+    const checkSimulatorStatus = async () => {
+      try {
+        const res = await axios.get(`${API_BASE_URL}/simulator/status`);
+        if (res.data) {
+          setSimulatorRunning(res.data.running);
+        }
+      } catch (err) {
+        console.error('시뮬레이터 상태 확인 실패:', err);
+      }
+    };
+    checkSimulatorStatus();
+  }, [API_BASE_URL]);
+
+  const handleSimulatorSwitch = async () => {
+    try {
+      const endpoint = simulatorRunning ? '/simulator/stop' : '/simulator/start';
+      await axios.post(`${API_BASE_URL}${endpoint}`);
+      setSimulatorRunning(!simulatorRunning);
+    } catch (error) {
+      console.error('시뮬레이터 제어 실패:', error);
+      alert('시뮬레이터 제어 중 오류가 발생했습니다.');
+    }
+  };
 
   const toggleTheme = () => {
     setThemeMode(prev => prev === 'light' ? 'dark' : 'light');
@@ -140,6 +203,11 @@ const App = () => {
               <Route path="*" element={<div style={{ padding: '24px' }}>페이지를 준비 중입니다.</div>} />
             </Routes>
           </MainContent>
+
+          <SimulatorSwitch $isRunning={simulatorRunning} onClick={handleSimulatorSwitch}>
+            {simulatorRunning ? <Play size={14} /> : <Pause size={14} />}
+            {simulatorRunning ? '실행중' : '중지'}
+          </SimulatorSwitch>
         </Container>
       </ThemeProvider>
     </Router>

@@ -1,9 +1,12 @@
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from eventhub_consumer import SensorEventConsumer
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import Integer
+from typing import Optional
 from database import init_data_db, data_db, logis_data_db
-from models import LogisticsZone, LogisticsLine
+from models import LogisticsZone, LogisticsLine, SensorEvent
 from schemas import (
     LogisticsZoneCreate, 
     LogisticsZone as LogisticsZoneSchema,
@@ -16,13 +19,31 @@ import os
 import threading
 import random
 import asyncio
+from pathlib import Path
+from dotenv import load_dotenv
+from datetime import datetime
+
+# .env 파일 로드
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 # 백엔드 폴더에 있는 basket_manager 임포트
 from basket_manager import BasketPool
 
-# sensor_adapter 경로 추가 (프로젝트 루트의 sensor_adapter)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from sensor_adapter import create_adapter
+# ====== 다중 DB 저장용 설정 ======
+# 로컬 SQLite (프론트엔드용)
+LOCAL_SQLITE_URL = "sqlite:///logistics_presets.db"
+local_sqlite_engine = create_engine(LOCAL_SQLITE_URL, echo=False)
+LocalSQLiteSession = sessionmaker(bind=local_sqlite_engine)
+
+# Azure PostgreSQL
+AZURE_DATABASE_URL = os.getenv("AZ_POSTGRE_DATABASE_URL")
+if AZURE_DATABASE_URL:
+    azure_engine = create_engine(AZURE_DATABASE_URL, echo=False, pool_size=5, max_overflow=10)
+    AzureSession = sessionmaker(bind=azure_engine)
+else:
+    AzureSession = None
+    print("⚠️ AZ_POSTGRE_DATABASE_URL 없음 - Azure 동기화 비활성화")
 
 app = FastAPI(title="Azure Rail Logistics Backend")
 
@@ -30,7 +51,25 @@ app = FastAPI(title="Azure Rail Logistics Backend")
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """모든 HTTP 요청 로깅"""
-    print(f"\n>>> 요청: {request.method} {request.url.path}")
+    xff = request.headers.get("x-forwarded-for")
+    xri = request.headers.get("x-real-ip")
+
+    if xff:
+        client_ip = xff.split(",")[0].strip()
+        client_port = "unknown"
+        source = "xff"
+    elif xri:
+        client_ip = xri.strip()
+        client_port = "unknown"
+        source = "x-real-ip"
+    else:
+        client_ip = request.client.host if request.client else "unknown"
+        client_port = request.client.port if request.client else "unknown"
+        source = "client"
+
+    print(
+        f"\n>>> 요청: {request.method} {request.url.path} from {client_ip}:{client_port} ({source})"
+    )
     response = await call_next(request)
     print(f"<<< 응답: {response.status_code}")
     return response
@@ -44,25 +83,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Kafka Consumer 인스턴스
-consumer = SensorEventConsumer()
-print("Kafka Consumer 인스턴스 생성 완료")
+# EventHub Consumer (환경변수 있을 때만 활성화)
+consumer = None
+if os.getenv("EVENTHUB_CONNECTION_STRING"):
+    try:
+        from eventhub_consumer import SensorEventConsumer
+        # consumer는 나중에 basket_pool 초기화 후 생성
+        print("EventHub Consumer 모듈 로드 완료 (basket_pool 초기화 후 인스턴스 생성 예정)")
+    except Exception as e:
+        print(f"⚠️ EventHub Consumer 모듈 로드 실패: {e}")
+else:
+    print("⚠️ EVENTHUB_CONNECTION_STRING 없음 - EventHub Consumer 비활성화")
 
-# 센서 어댑터 인스턴스
-sensor_adapter = None
-
-# Basket Pool 인스턴스 (나중에 zones 설정으로 초기화)
+# ============ 전역 변수 ============
+# Basket Pool 인스턴스 (zones 설정으로 초기화)
 basket_pool = None
-
-# 센서 시뮬레이터 상태
-simulator_running = False
 
 # 바스켓 풀 최대 한도 (메모리 보호용)
 MAX_POOL_SIZE = 20000
 
+# 라인 최대 수용량 경고 임계값 (%)
+MAX_LINE_CAPACITY_PERCENT = 80
+
+# 같은 라인에서 바스켓 간 최소 간격 (초)
+MIN_BASKET_INTERVAL = 3.0
+
+# 라인별 용량 정보 (초기화 시 계산, 매번 재계산 방지)
+# 구조: {line_id: {"max": int, "length": float}}
+line_capacity_info = {}
+
 def initialize_basket_pool(db: Session):
-    """zones 설정을 기반으로 바스켓 풀 초기화"""
-    global basket_pool
+    """
+    zones 설정을 기반으로 바스켓 풀 초기화
+    - BasketPool 인스턴스 생성
+    - 라인별 속도 구간 초기화 (센서 개수 기준)
+    - 라인별 최대 수용량 계산 및 저장
+    """
+    global basket_pool, line_capacity_info
     
     zones = logis_data_db.get_all_zones(db)
     
@@ -83,10 +140,232 @@ def initialize_basket_pool(db: Session):
     
     # BasketPool 초기화 (초기 배치 없이 빈 상태로 시작)
     basket_pool = BasketPool(pool_size=1000)
-    print(f"Basket Pool 초기화 완료: {len(basket_pool.get_all_baskets())}개 바스켓")
+    
+    # ============ 라인별 최대 수용량 계산 (초기화 시 1회만) ============
+    # 5m 간격 기준으로 각 라인이 수용할 수 있는 최대 바스켓 수 계산
+    line_capacity_info = {}
+    for zone in zones:
+        zone_lines = zone.zone_lines if zone.zone_lines else []
+        for line in zone_lines:
+            line_id = line.line_id
+            line_length = line.length if hasattr(line, 'length') else 100
+            max_capacity = int(line_length / 5)  # 5m 간격 기준
+            line_capacity_info[line_id] = {
+                "max": max_capacity,
+                "length": line_length
+            }
+    
+    # ============ 구간별 속도 설정 초기화 (센서 기준 구간 분할) ============
+    basket_pool.line_speed_zones = {}
+    basket_pool.base_speed_mps = 1.0  # 기본 속도 1m/s
+    for zone in zones:
+        zone_lines = zone.zone_lines if zone.zone_lines else []
+        for line in zone_lines:
+            line_id = line.line_id
+            line_length = line.length if hasattr(line, 'length') else 100
+            
+            # 센서 개수 계산 (라인의 센서 수)
+            if hasattr(line, 'sensors') and line.sensors:
+                # sensors가 리스트면 len(), 정수면 그대로 사용
+                if isinstance(line.sensors, (list, tuple)):
+                    num_segments = len(line.sensors)
+                else:
+                    num_segments = int(line.sensors) if line.sensors > 0 else 5
+            else:
+                num_segments = 5  # 센서가 없으면 기본 5개 구간
+            
+            # 센서 개수만큼 구간 분할
+            segment_length = line_length / num_segments
+            segments = []
+            for i in range(num_segments):
+                segments.append({
+                    "start": i * segment_length,
+                    "end": (i + 1) * segment_length,
+                    "multiplier": random.choice([0.5, 0.8, 1.0, 1.2, 1.5])  # 속도 계수
+                })
+            basket_pool.line_speed_zones[line_id] = segments
+    
+    print(f"Basket Pool 초기화 완료: {len(basket_pool.get_all_baskets())}개 바스켓, {len(basket_pool.line_speed_zones)}개 라인 속도 구간 설정")
+
+def get_speed_at_position(line_id: str, position_m: float) -> float:
+    """
+    바스켓의 현재 위치에 해당하는 구간의 속도 계수 반환
+    
+    Args:
+        line_id: 라인 ID
+        position_m: 바스켓의 현재 위치 (미터)
+    
+    Returns:
+        속도 계수 (0.5 ~ 1.5, 기본값 1.0)
+    """
+    if not basket_pool or not hasattr(basket_pool, 'line_speed_zones'):
+        return 1.0
+    
+    if line_id not in basket_pool.line_speed_zones:
+        return 1.0
+    
+    segments = basket_pool.line_speed_zones[line_id]
+    for seg in segments:
+        if seg["start"] <= position_m < seg["end"]:
+            return seg["multiplier"]
+    
+    # 마지막 구간
+    if segments:
+        return segments[-1]["multiplier"]
+    return 1.0
+
+async def update_basket_positions_task():
+    """
+    백그라운드 작업: 구간별 속도를 적용하여 바스켓 위치를 주기적으로 업데이트
+    
+    동작 원리:
+    1. 100ms마다 moving/in_transit 상태의 모든 바스켓 확인
+    2. 각 바스켓의 현재 위치에 해당하는 구간의 속도 계수 조회
+    3. 실제 속도 = 기본 속도(1m/s) × 속도 계수 × 0.1초
+    4. 새 위치 계산 후 라인 끝 도달 시 'arrived' 상태로 전환
+    5. 앞 바스켓 때문에 이동이 멈춘 경우 병목 플래그 설정
+    """
+    print("[위치 업데이터] 바스켓 이동 시스템 가동")
+    while True:
+        try:
+            await asyncio.sleep(0.1)  # 100ms마다 업데이트
+            if basket_pool and hasattr(basket_pool, 'base_speed_mps'):
+                baskets = basket_pool.get_all_baskets()
+                for basket_id, basket in baskets.items():
+                    if basket['status'] in ['moving', 'in_transit']:
+                        line_id = basket.get('line_id')
+                        position_m = basket.get('position_m', 0)
+                        line_length = basket.get('line_length', 100)
+                        
+                        if line_id and line_length > 0:
+                            # 현재 위치의 속도 계수 가져오기
+                            speed_multiplier = get_speed_at_position(line_id, position_m)
+                            actual_speed_mps = basket_pool.base_speed_mps * speed_multiplier
+                            
+                            # 0.1초 동안 이동한 거리 계산
+                            distance_delta = actual_speed_mps * 0.1
+                            new_position_m = position_m + distance_delta
+                            
+                            # ========== 추월 방지: 같은 라인의 앞 바스켓과 최소 거리 유지 ==========
+                            # 같은 라인의 다른 바스켓 중 위치가 가까운 것 확인
+                            min_distance = 2.0  # 바스켓 간 최소 거리 (미터)
+                            is_blocked_by_front = False  # 앞 바스켓에 의해 막혔는가?
+                            for other_id, other_basket in baskets.items():
+                                if (other_id != basket_id and 
+                                    other_basket.get('line_id') == line_id and
+                                    other_basket.get('status') in ['moving', 'in_transit']):
+                                    
+                                    other_pos = other_basket.get('position_m', 0)
+                                    
+                                    # 앞 바스켓이 있으면 추월 금지
+                                    if other_pos >= position_m and (other_pos - new_position_m) < min_distance:
+                                        new_position_m = other_pos - min_distance
+                                        # 새 위치가 현재 위치보다 작으면 이동 중지 (병목)
+                                        if new_position_m <= position_m:
+                                            new_position_m = position_m
+                                            is_blocked_by_front = True
+                            
+                            # 라인 끝에 도달하면 arrived 상태로 변경
+                            if new_position_m >= line_length:
+                                new_position_m = line_length
+                                basket_pool.update_basket_status(basket_id, 'arrived')
+                            
+                            # 위치 업데이트 및 병목 플래그 설정
+                            progress_percent = (new_position_m / line_length * 100) if line_length > 0 else 0
+                            basket_pool.update_basket_position(
+                                basket_id=basket_id,
+                                position_m=new_position_m,
+                                progress_percent=min(progress_percent, 100)
+                            )
+                            
+                            # 앞 바스켓 때문에 이동이 멈춘 경우 병목으로 표시
+                            if is_blocked_by_front:
+                                basket_pool.set_motion_state(basket_id, "stopped", is_bottleneck=True)
+                            else:
+                                basket_pool.set_motion_state(basket_id, "moving", is_bottleneck=False)
+        except Exception as e:
+            print(f"[위치 업데이트] 오류 발생: {e}")
+            await asyncio.sleep(1)
+
+async def deployment_queue_task():
+    """
+    백그라운드 작업: 투입 대기 큐를 처리하여 바스켓을 순차적으로 투입
+    
+    투입 규칙:
+    1. 라인에 바스켓이 없으면 → 즉시 투입
+    2. 라인에 바스켓이 있고 + 마지막 투입 후 0.8초 경과 → 투입 가능
+    3. 그 외 → 대기
+    
+    목적: 같은 라인에서 바스켓 간 충돌 방지 및 안전한 간격 유지
+    """
+    print("[Deployment Queue] 바스켓 투입 시스템 가동")
+    global deployment_queue, line_last_deployment
+    import time
+    
+    while True:
+        try:
+            await asyncio.sleep(0.1)  # 100ms마다 체크
+            
+            if not deployment_queue or not basket_pool:
+                continue
+            
+            current_time = time.time()
+            deployed_indices = []  # 투입 완료된 큐 인덱스
+            
+            for idx, deployment in enumerate(deployment_queue):
+                basket_id = deployment["basket_id"]
+                zone_id = deployment["zone_id"]
+                line_id = deployment["line_id"]
+                destination = deployment["destination"]
+                
+                # 라인별 마지막 투입 시간 체크
+                last_deploy_time = line_last_deployment.get(line_id, 0)
+                time_since_last = current_time - last_deploy_time
+                
+                # 해당 라인의 현재 바스켓 수 체크
+                line_baskets = [b for b in basket_pool.get_all_baskets().values() 
+                               if b.get('line_id') == line_id and b['status'] in ['moving', 'in_transit', 'deploying']]
+                
+                # 투입 조건 확인
+                can_deploy = False
+                reason = ""
+                
+                if len(line_baskets) == 0:
+                    # 라인에 바스켓이 없으면 즉시 투입 가능
+                    can_deploy = True
+                    reason = "라인 비어있음"
+                elif time_since_last >= MIN_BASKET_INTERVAL:
+                    # 최소 간격이 지났으면 투입 가능
+                    can_deploy = True
+                    reason = f"간격 충족 ({time_since_last:.1f}s)"
+                else:
+                    reason = f"대기 중 ({MIN_BASKET_INTERVAL - time_since_last:.1f}s 남음)"
+                
+                if can_deploy:
+                    # 바스켓 투입 실행
+                    assigned = basket_pool.assign_basket(basket_id, zone_id, line_id, destination)
+                    if assigned:
+                        line_last_deployment[line_id] = current_time
+                        deployed_indices.append(idx)
+                        print(f"[투입 완료] {basket_id} → {line_id} ({reason})")
+            
+            # 투입 완료된 항목을 큐에서 제거 (역순으로 제거)
+            for idx in reversed(deployed_indices):
+                deployment_queue.pop(idx)
+                
+        except Exception as e:
+            print(f"[Deployment Queue] 오류: {e}")
+            await asyncio.sleep(1)
 
 async def recycle_baskets_task():
-    """백그라운드 작업: 도착(arrived)한 바스켓을 주기적으로 회수하여 재사용 가능하게 만듦"""
+    """
+    백그라운드 작업: 도착(arrived)한 바스켓을 주기적으로 회수하여 재사용 가능하게 만듦
+    
+    동작:
+    - 5초마다 모든 바스켓 상태 확인
+    - arrived 상태인 바스켓을 available 상태로 전환
+    - 바스켓 풀에서 재사용 가능하도록 리셋
+    """
     print("[Recycler] 바스켓 회수 시스템 가동")
     while True:
         try:
@@ -104,64 +383,179 @@ async def recycle_baskets_task():
 
 @app.on_event("startup")
 async def startup_event():
-    """서버 시작 시 Kafka Consumer 시작"""
-    global simulator_running, sensor_adapter
+    """서버 시작 시 EventHub Consumer 시작"""
+    global consumer, deployment_queue, line_last_deployment
+    deployment_queue = []
+    line_last_deployment = {}
     
-    init_data_db()  # 데이터베이스 초기화
-    
-    # BasketPool 초기화
-    db = next(data_db())
     try:
-        initialize_basket_pool(db)
+        init_data_db()  # 데이터베이스 초기화
+        print("[STARTUP] ✅ 데이터베이스 초기화 완료")
         
-        # zones 정보 조회
-        zones = logis_data_db.get_all_zones(db)
-        zones_config = [
-            {
-                "zone_id": z.zone_id,
-                "zone_name": z.name,
-                "lines": z.lines,
-                "length": z.length,
-                "sensors": z.sensors
-            }
-            for z in zones
-        ]
-    finally:
-        db.close()
+        # BasketPool 초기화
+        db = next(data_db())
+        try:
+            initialize_basket_pool(db)
+            
+            # zones 정보 조회
+            zones = logis_data_db.get_all_zones(db)
+            print(f"[STARTUP] ✅ BasketPool 초기화 완료, {len(zones)}개 존 로드")
+            
+            # 센서-라인 매핑 생성 (센서 위치 정보)
+            sensor_line_mapping = {}
+            for zone in zones:
+                zone_lines = zone.zone_lines if zone.zone_lines else []
+                for line in zone_lines:
+                    line_length = line.length if hasattr(line, 'length') else 100
+                    # 라인의 센서 개수 추정 (zone.sensors를 라인 수로 나눔)
+                    total_zone_sensors = zone.sensors if zone.sensors else 0
+                    sensors_per_line = max(1, int(total_zone_sensors / len(zone_lines))) if len(zone_lines) > 0 else 0
+                    
+                    # 각 센서의 위치 계산
+                    for i in range(sensors_per_line):
+                        sensor_num = i + 1
+                        sensor_id = f"{line.line_id}-S{sensor_num:03d}"
+                        position_m = (sensor_num / (sensors_per_line + 1)) * line_length
+                        sensor_line_mapping[sensor_id] = {
+                            "line_id": line.line_id,
+                            "position_m": position_m,
+                            "line_length": line_length
+                        }
+            
+            print(f"[STARTUP] ✅ 센서-라인 매핑 생성 완료: {len(sensor_line_mapping)}개 센서")
+            
+        finally:
+            db.close()
+        
+        # EventHub Consumer 시작 (basket_pool 참조 전달)
+        if os.getenv("EVENTHUB_CONNECTION_STRING"):
+            try:
+                from eventhub_consumer import SensorEventConsumer
+                consumer = SensorEventConsumer(
+                    basket_pool=basket_pool,
+                    sensor_line_mapping=sensor_line_mapping
+                )
+                consumer.start()
+                print("[STARTUP] ✅ EventHub Consumer 시작 완료 (basket_pool 연동)")
+            except Exception as e:
+                print(f"[STARTUP] ⚠️ EventHub Consumer 시작 실패: {e}")
+        else:
+            print("[STARTUP] ⚠️ EventHub Consumer 비활성화 상태 - Event Hub 연동 없음")
+        
+        print("[STARTUP] ✅ Backend 서버 시작 완료")
+        
+        # 백그라운드 태스크들 시작
+        asyncio.create_task(deployment_queue_task())  # 투입 큐 처리
+        asyncio.create_task(recycle_baskets_task())  # 바스켓 회수
+        asyncio.create_task(update_basket_positions_task())  # 위치 업데이트
+        
+    except Exception as e:
+        print(f"[STARTUP] ❌ 서버 시작 중 오류: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+@app.get("/health")
+async def health_check():
+    """기본 헬스 체크"""
+    return {
+        "status": "ok",
+        "service": "backend",
+        "events_received": consumer.get_event_count() if consumer else 0
+    }
+
+@app.get("/debug/eventhub-messages")
+async def get_eventhub_messages(limit: int = 100):
+    """최근 EventHub 메시지 조회 (디버그용)"""
+    if not consumer:
+        return {"messages": [], "count": 0, "error": "Consumer not initialized"}
     
-    # 센서 어댑터 생성 및 시작 (환경 변수 기반)
-    # SENSOR_ADAPTER=simulator (기본값) 또는 real_sensor
-    sensor_adapter = create_adapter(
-        basket_pool=basket_pool,
-        zones_config=zones_config
-    )
-    sensor_adapter.start()
-    simulator_running = True
-    print(f"센서 어댑터 시작 완료: {type(sensor_adapter).__name__}")
+    # 최근 메시지를 역순으로 (최신순)
+    recent_messages = consumer.latest_events[-limit:][::-1]
     
-    # Kafka Consumer 시작
-    consumer.start()
-    print("Kafka Consumer 시작 완료")
+    return {
+        "count": len(recent_messages),
+        "total_received": len(consumer.latest_events),
+        "limit": limit,
+        "messages": recent_messages
+    }
+
+@app.get("/debug/eventhub-stats")
+async def get_eventhub_stats():
+    """EventHub 메시지 수신 통계"""
+    if not consumer:
+        return {"error": "Consumer not initialized"}
     
-    print("Backend 서버 시작 완료")
+    # 구역별 메시지 수 계산
+    zone_stats = {}
+    for event in consumer.latest_events:
+        zone_id = event.get("zone_id", "unknown")
+        if zone_id not in zone_stats:
+            zone_stats[zone_id] = {"total": 0, "signal_true": 0}
+        zone_stats[zone_id]["total"] += 1
+        if event.get("signal"):
+            zone_stats[zone_id]["signal_true"] += 1
     
-    # 바스켓 회수 백그라운드 태스크 시작
-    asyncio.create_task(recycle_baskets_task())
+    return {
+        "total_messages": len(consumer.latest_events),
+        "zone_stats": zone_stats,
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/health/db")
+async def health_check_db():
+    """데이터베이스 연결 상태 확인"""
+    from database import engine
+    import os
+    
+    az_url = os.getenv("AZ_POSTGRE_DATABASE_URL")
+    db_url = os.getenv("DATABASE_URL")
+    
+    try:
+        # 현재 연결된 DB 확인
+        current_url = str(engine.url)
+        
+        return {
+            "status": "healthy",
+            "connected_to": "Azure PostgreSQL" if "psql-logistics-kr" in current_url else "Local PostgreSQL",
+            "current_database_url": current_url.split("@")[1] if "@" in current_url else current_url,
+            "env_AZ_POSTGRE_DATABASE_URL": "✅ 설정됨" if az_url else "❌ 없음",
+            "env_DATABASE_URL": "✅ 설정됨" if db_url else "❌ 없음"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.get("/health/consumer")
+async def health_check_consumer():
+    """EventHub Consumer 상태 확인"""
+    if consumer is None:
+        return {
+            "status": "disabled",
+            "message": "EventHub Consumer가 비활성화되어 있습니다"
+        }
+    
+    return {
+        "status": "enabled",
+        "is_running": consumer.is_running if hasattr(consumer, 'is_running') else "unknown",
+        "latest_events_count": len(consumer.latest_events) if hasattr(consumer, 'latest_events') else 0,
+        "buffer_size": len(consumer.event_buffer) if hasattr(consumer, 'event_buffer') else 0,
+        "message": "EventHub Consumer가 활성화되어 있습니다"
+    }
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """서버 종료 시 Kafka Consumer와 센서 어댑터 중지"""
+    """서버 종료 시 EventHub Consumer 중지"""
     try:
-        sensor_adapter.stop()  # 센서 어댑터 중지
+        if consumer:
+            consumer.stop()
+            print("[SHUTDOWN] EventHub Consumer 중지 완료")
     except Exception as e:
-        print(f"센서 어댑터 중지 오류: {e}")
+        print(f"[SHUTDOWN] 오류: {e}")
     
-    try:
-        consumer.stop()
-    except Exception as e:
-        print(f"컨슈머 중지 오류: {e}")
-    
-    print("Backend 서버 종료")
+    print("[SHUTDOWN] Backend 서버 종료")
 
 @app.get("/")
 async def root():
@@ -169,14 +563,14 @@ async def root():
     return {
         "status": "ok",
         "message": "Azure Rail Logistics Backend",
-        "events_received": consumer.get_event_count()
+        "events_received": consumer.get_event_count() if consumer else 0
     }
 
 @app.get("/events/latest")
 async def get_latest_events(count: int = 10, only_active: bool = False):
     """최근 센서 이벤트 조회"""
     # consumer.latest_events 리스트를 직접 사용하여 안전하게 조회
-    if hasattr(consumer, 'latest_events') and consumer.latest_events:
+    if consumer and hasattr(consumer, 'latest_events') and consumer.latest_events:
         if only_active:
             # active인 것만 필터링하여 뒤에서부터 count개 가져오기
             active_events = [e for e in consumer.latest_events if e.get("signal") == True]
@@ -201,6 +595,9 @@ async def get_latest_events(count: int = 10, only_active: bool = False):
 @app.get("/events/stats")
 async def get_event_stats():
     """이벤트 통계"""
+    if not consumer or not hasattr(consumer, 'latest_events'):
+        return {"message": "No consumer available"}
+    
     events = consumer.latest_events
     
     if not events:
@@ -225,41 +622,78 @@ async def get_event_stats():
 
 @app.get("/zones/summary")
 async def get_zones_summary():
-    """존별 요약 정보"""
-    events = consumer.latest_events
+    """
+    존별 요약 정보
     
-    if not events:
-        return []
-    
-    # 존별로 데이터 집계
+    포함 사항:
+    - 총 바스켓 수, in_transit 바스켓 수
+    - 병목 상태인 바스켓 개수
+    - 센서 데이터 기반 정보 (EventHub 활성화 시)
+    """
     zone_data = {}
-    for event in events:
-        zone_id = event.get("zone_id")
-        if not zone_id:
-            continue
+    
+    # ========== 방법 1: 바스켓 풀 상태 기반 정보 ==========
+    if basket_pool:
+        baskets = basket_pool.get_all_baskets()
+        for basket_id, basket in baskets.items():
+            zone_id = basket.get('zone_id')
+            if not zone_id:
+                continue
             
-        if zone_id not in zone_data:
-            zone_data[zone_id] = {
-                "zone_id": zone_id,
-                "data_points": 0,
-                "total_throughput": 0,
-                "total_speed": 0,
-                "speed_count": 0,
-                "bottleneck_count": 0
-            }
-        
-        zone_data[zone_id]["data_points"] += 1
-        
-        if event.get("signal"):
-            zone_data[zone_id]["total_throughput"] += 1
-            speed = event.get("speed", 0)
-            if speed > 0:
-                zone_data[zone_id]["total_speed"] += speed
-                zone_data[zone_id]["speed_count"] += 1
+            if zone_id not in zone_data:
+                zone_data[zone_id] = {
+                    "zone_id": zone_id,
+                    "total_baskets": 0,
+                    "in_transit_baskets": 0,
+                    "bottleneck_count": 0,
+                    "arrived_baskets": 0,
+                    "data_points": 0,
+                    "total_throughput": 0,
+                    "total_speed": 0,
+                    "speed_count": 0
+                }
             
-            # 속도가 낮으면 병목으로 간주
-            if speed < 30:
+            zone_data[zone_id]["total_baskets"] += 1
+            
+            if basket['status'] in ['in_transit', 'moving']:
+                zone_data[zone_id]["in_transit_baskets"] += 1
+            
+            if basket['status'] == 'arrived':
+                zone_data[zone_id]["arrived_baskets"] += 1
+            
+            if basket.get('is_bottleneck') == True:
                 zone_data[zone_id]["bottleneck_count"] += 1
+    
+    # ========== 방법 2: EventHub 센서 데이터 기반 정보 (옵션) ==========
+    if consumer and hasattr(consumer, 'latest_events'):
+        events = consumer.latest_events
+        if events:
+            for event in events:
+                zone_id = event.get("zone_id")
+                if not zone_id:
+                    continue
+                
+                if zone_id not in zone_data:
+                    zone_data[zone_id] = {
+                        "zone_id": zone_id,
+                        "total_baskets": 0,
+                        "in_transit_baskets": 0,
+                        "bottleneck_count": 0,
+                        "arrived_baskets": 0,
+                        "data_points": 0,
+                        "total_throughput": 0,
+                        "total_speed": 0,
+                        "speed_count": 0
+                    }
+                
+                zone_data[zone_id]["data_points"] += 1
+                
+                if event.get("signal"):
+                    zone_data[zone_id]["total_throughput"] += 1
+                    speed = event.get("speed", 0)
+                    if speed > 0:
+                        zone_data[zone_id]["total_speed"] += speed
+                        zone_data[zone_id]["speed_count"] += 1
     
     # 평균 계산 및 결과 생성
     result = []
@@ -267,42 +701,66 @@ async def get_zones_summary():
         avg_speed = data["total_speed"] / data["speed_count"] if data["speed_count"] > 0 else 0
         result.append({
             "zone_id": zone_id,
-            "total_throughput": data["total_throughput"],
-            "avg_speed": round(avg_speed, 2),
+            "total_baskets": data["total_baskets"],
+            "in_transit_baskets": data["in_transit_baskets"],
+            "arrived_baskets": data["arrived_baskets"],
+            "bottleneck_count": data["bottleneck_count"],
             "data_points": data["data_points"],
-            "bottleneck_count": data["bottleneck_count"]
+            "total_throughput": data["total_throughput"],
+            "avg_speed": round(avg_speed, 2)
         })
     
     return result
 
 @app.get("/bottlenecks")
 async def get_bottlenecks():
-    """병목 현상 감지 - signal이 true이면서 속도가 30% 이하인 이벤트 반환"""
-    events = consumer.latest_events
+    """
+    병목 현상 감지 - 바스켓 상태 기반
     
-    if not events:
-        return []
-    
-    # signal이 true이면서 속도가 30% 이하인 이벤트를 병목으로 간주
-    bottleneck_events = [e for e in events if e.get("signal") == True and e.get("speed", 100) < 30]
-    
-    # zone_id별로 병목 점수 계산
+    병목 판정:
+    - is_bottleneck == True인 바스켓 (앞 바스켓 때문에 이동 중단)
+    - 또는 센서 데이터에서 signal==true && speed<30 이벤트
+    """
     bottleneck_zones = {}
-    for event in bottleneck_events:
-        zone_id = event.get("zone_id")
-        if zone_id:
-            if zone_id not in bottleneck_zones:
-                bottleneck_zones[zone_id] = {
-                    "zone_id": zone_id,
-                    "aggregated_id": f"BOTTLENECK-{zone_id}",
-                    "bottleneck_score": 0.0,
-                    "count": 0
-                }
-            bottleneck_zones[zone_id]["count"] += 1
-            bottleneck_zones[zone_id]["bottleneck_score"] = min(1.0, bottleneck_zones[zone_id]["count"] / 10)
     
-    # 점수 내림차순 정렬
-    result = sorted(bottleneck_zones.values(), key=lambda x: x["bottleneck_score"], reverse=True)
+    # ========== 방법 1: 바스켓 풀 상태 기반 병목 감지 ==========
+    if basket_pool:
+        baskets = basket_pool.get_all_baskets()
+        for basket_id, basket in baskets.items():
+            # is_bottleneck이 true인 바스켓 찾기
+            if basket.get('is_bottleneck') == True:
+                zone_id = basket.get('zone_id')
+                if zone_id:
+                    if zone_id not in bottleneck_zones:
+                        bottleneck_zones[zone_id] = {
+                            "zone_id": zone_id,
+                            "aggregated_id": f"BOTTLENECK-{zone_id}",
+                            "bottleneck_count": 0,
+                            "bottleneck_baskets": []
+                        }
+                    bottleneck_zones[zone_id]["bottleneck_count"] += 1
+                    bottleneck_zones[zone_id]["bottleneck_baskets"].append(basket_id)
+    
+    # ========== 방법 2: EventHub 센서 데이터 기반 병목 감지 (옵션) ==========
+    if consumer and hasattr(consumer, 'latest_events'):
+        events = consumer.latest_events
+        if events:
+            bottleneck_events = [e for e in events if e.get("signal") == True and e.get("speed", 100) < 30]
+            for event in bottleneck_events:
+                zone_id = event.get("zone_id")
+                if zone_id:
+                    if zone_id not in bottleneck_zones:
+                        bottleneck_zones[zone_id] = {
+                            "zone_id": zone_id,
+                            "aggregated_id": f"BOTTLENECK-{zone_id}",
+                            "bottleneck_count": 0,
+                            "bottleneck_baskets": []
+                        }
+                    # 센서 데이터 기반 병목은 카운트하지만 바스켓 리스트에는 추가하지 않음
+                    bottleneck_zones[zone_id]["sensor_event_count"] = bottleneck_zones[zone_id].get("sensor_event_count", 0) + 1
+    
+    # 병목 바스켓 개수로 정렬
+    result = sorted(bottleneck_zones.values(), key=lambda x: x["bottleneck_count"], reverse=True)
     return result
 
 @app.get("/sensors/history")
@@ -319,15 +777,189 @@ async def get_sensor_history(zone_id: str = None, count: int = 100):
     # 최근 count개만 반환
     return filtered_events[-count:]
 
+@app.get("/api/sensor-events/db")
+async def get_sensor_events_from_db(
+    zone_id: Optional[str] = None,
+    basket_id: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(data_db)
+):
+    """
+    데이터베이스에 저장된 센서 이벤트 조회 (분석/히스토리용)
+    
+    Args:
+        zone_id: 구획 ID (선택)
+        basket_id: 바스켓 ID (선택)
+        limit: 반환 행 수 (기본 100)
+        offset: 시작 위치 (기본 0, 페이지네이션용)
+    
+    Returns:
+        sensor_events 테이블의 데이터
+    """
+    from models import SensorEvent
+    from datetime import datetime, timedelta
+    
+    try:
+        query = db.query(SensorEvent)
+        
+        # 필터링
+        if zone_id:
+            query = query.filter(SensorEvent.zone_id == zone_id)
+        if basket_id:
+            query = query.filter(SensorEvent.basket_id == basket_id)
+        
+        # 정렬 및 페이지네이션
+        query = query.order_by(SensorEvent.timestamp.desc())
+        total_count = query.count()
+        
+        events = query.offset(offset).limit(limit).all()
+        
+        # 결과 변환
+        result = [
+            {
+                "id": e.id,
+                "timestamp": e.timestamp.isoformat(),
+                "zone_id": e.zone_id,
+                "basket_id": e.basket_id,
+                "sensor_id": e.sensor_id,
+                "signal": e.signal,
+                "speed": e.speed,
+                "position_x": e.position_x,
+                "position_y": e.position_y
+            }
+            for e in events
+        ]
+        
+        return {
+            "total_count": total_count,
+            "returned_count": len(result),
+            "offset": offset,
+            "limit": limit,
+            "events": result
+        }
+        
+    except Exception as e:
+        print(f"[API] DB 조회 오류: {e}")
+        return {
+            "error": str(e),
+            "events": []
+        }
+
+@app.get("/api/sensor-events/stats")
+async def get_sensor_events_stats(
+    zone_id: Optional[str] = None,
+    hours: int = 1,
+    db: Session = Depends(data_db)
+):
+    """
+    센서 이벤트 통계 (최근 N시간)
+    
+    Args:
+        zone_id: 구획 ID (선택)
+        hours: 조회 기간 (기본 1시간)
+    
+    Returns:
+        - 총 이벤트 수
+        - 신호 감지 횟수
+        - 평균 속도
+        - 구획별 통계
+    """
+    from models import SensorEvent
+    from datetime import datetime, timedelta
+    from sqlalchemy import func
+    
+    try:
+        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+        query = db.query(SensorEvent).filter(SensorEvent.timestamp >= cutoff_time)
+        
+        if zone_id:
+            query = query.filter(SensorEvent.zone_id == zone_id)
+        
+        # 전체 통계
+        total = query.count()
+        signal_count = query.filter(SensorEvent.signal == True).count()
+        
+        avg_speed = db.query(func.avg(SensorEvent.speed)).filter(
+            SensorEvent.timestamp >= cutoff_time,
+            SensorEvent.speed > 0
+        )
+        if zone_id:
+            avg_speed = avg_speed.filter(SensorEvent.zone_id == zone_id)
+        avg_speed = float(avg_speed.scalar() or 0)
+        
+        # 구획별 통계
+        zone_stats = db.query(
+            SensorEvent.zone_id,
+            func.count(SensorEvent.id).label('count'),
+            func.sum((SensorEvent.signal == True).cast(Integer)).label('signal_count'),
+            func.avg(SensorEvent.speed).label('avg_speed')
+        ).filter(
+            SensorEvent.timestamp >= cutoff_time
+        ).group_by(SensorEvent.zone_id).all()
+        
+        zone_summary = [
+            {
+                "zone_id": z[0],
+                "event_count": z[1],
+                "signal_count": z[2] or 0,
+                "avg_speed": round(float(z[3] or 0), 2)
+            }
+            for z in zone_stats
+        ]
+        
+        return {
+            "period_hours": hours,
+            "total_events": total,
+            "signal_detected": signal_count,
+            "avg_speed": round(avg_speed, 2),
+            "zones": zone_summary
+        }
+        
+    except Exception as e:
+        print(f"[API] 통계 조회 오류: {e}")
+        return {
+            "error": str(e)
+        }
+
 # ============ ZONES 설정 API ============
 
 @app.get("/zones")
 async def get_zones(db: Session = Depends(data_db)):
+    """
+    모든 존 정보 조회 (라인 용량 정보 포함)
+    
+    Returns:
+        - zones: 존 목록
+        - line_capacities: 각 라인의 최대 수용량 및 현재 사용량
+    """
     zones = logis_data_db.get_all_zones(db)
     print(f"[API] /zones 반환: {len(zones)}개 존")
+    
+    # 라인 용량 정보 추가 (현재 사용량 포함)
+    enriched_line_capacities = {}
+    if basket_pool and line_capacity_info:
+        for line_id, capacity_info in line_capacity_info.items():
+            # 현재 해당 라인에 있는 바스켓 수 계산
+            current_baskets = [b for b in basket_pool.get_all_baskets().values() 
+                             if b.get('line_id') == line_id and b['status'] in ['moving', 'in_transit', 'deploying']]
+            current_count = len(current_baskets)
+            max_capacity = capacity_info["max"]
+            
+            enriched_line_capacities[line_id] = {
+                "current": current_count,
+                "max": max_capacity,
+                "length": capacity_info["length"],
+                "percent": (current_count / max_capacity * 100) if max_capacity > 0 else 0
+            }
+    
     if zones:
         print(f"  첫번째 존: {zones[0]}")
-    return zones
+    
+    return {
+        "zones": zones,
+        "line_capacities": enriched_line_capacities
+    }
 
 @app.post("/zones")
 async def create_zone(zone: LogisticsZoneCreate, db: Session = Depends(data_db)):
@@ -348,12 +980,12 @@ async def get_zones_config(db: Session = Depends(data_db)):
 @app.post("/zones/config", response_model=LogisticsZoneSchema)
 async def create_zone_with_lines(zone: LogisticsZoneCreate, db: Session = Depends(data_db)):
     """새 zone 추가 (라인도 자동 생성)"""
-    return logis_data_db.save_zone_with_lines(db, zone)
+    return logis_data_db.save_zone(db, zone)
 
 @app.put("/zones/config/{zone_id}", response_model=LogisticsZoneSchema)
 async def update_zone(zone_id: str, zone: LogisticsZoneCreate, db: Session = Depends(data_db)):
     """zone 업데이트"""
-    db_zone = logis_data_db.update_zone_data(db, zone_id, zone)
+    db_zone = logis_data_db.update_zone(db, zone_id, zone)
     if not db_zone:
         return {"error": "Zone not found"}
     return db_zone
@@ -361,14 +993,14 @@ async def update_zone(zone_id: str, zone: LogisticsZoneCreate, db: Session = Dep
 @app.delete("/zones/config/{zone_id}")
 async def delete_zone(zone_id: str, db: Session = Depends(data_db)):
     """zone 삭제"""
-    result = logis_data_db.delete_zone_data(db, zone_id)
+    result = logis_data_db.delete_zone(db, zone_id)
     if not result:
         return {"error": "Zone not found"}
     return {"deleted": result}
 
 @app.post("/zones/config/batch")
 async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = Depends(data_db)):
-    """zones 전체 설정 (기존 데이터 전부 교체)"""
+    """zones 전체 설정 (기존 데이터 전부 교체) - SQLite + Azure 동시 저장"""
     print(f"\n[API] /zones/config/batch 요청 수신 (프리셋 저장)")
     print(f"  - 수신된 존 개수: {len(zones_list)}")
     for i, zone in enumerate(zones_list):
@@ -427,13 +1059,145 @@ async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = D
             print(f"    - Zone {zone_data.zone_id}: 새 라인 {len(new_lines)}개 생성됨")
             
         db.commit()
-        print("  - 배치 저장 완료 (DB Commit)")
+        print("  ✅ 로컬 PostgreSQL 저장 완료")
+        
+        # ====== SQLite + Azure 동시 저장 (백그라운드) ======
+        threading.Thread(
+            target=_sync_zones_to_sqlite_and_azure,
+            args=(zones_list,),
+            daemon=True
+        ).start()
+        
         return db.query(LogisticsZone).all()
         
     except Exception as e:
         db.rollback()
         print(f"  - 배치 저장 실패: {e}")
         raise e
+
+
+def _sync_zones_to_sqlite_and_azure(zones_list: List[LogisticsZoneCreate]):
+    """로컬 SQLite + Azure PostgreSQL에 동시에 동기화"""
+    try:
+        # ===== 로컬 SQLite 저장 =====
+        _save_zones_to_sqlite(zones_list)
+        
+        # ===== Azure PostgreSQL 저장 =====
+        if AzureSession:
+            _save_zones_to_azure(zones_list)
+        else:
+            print("  ⚠️ Azure 저장 스킵: AZ_POSTGRE_DATABASE_URL 미설정")
+            
+    except Exception as e:
+        print(f"  ❌ SQLite/Azure 동기화 실패: {e}")
+
+
+def _save_zones_to_sqlite(zones_list: List[LogisticsZoneCreate]):
+    """로컬 SQLite에 zones 저장"""
+    from sqlalchemy import Column, String, Integer, Text, TIMESTAMP, ForeignKey, Index, delete
+    from sqlalchemy.orm import declarative_base
+    from sqlalchemy.sql import func
+    
+    BaseSQLite = declarative_base()
+    
+    class SQLiteZone(BaseSQLite):
+        __tablename__ = 'logistics_zones'
+        zone_id = Column(String(50), primary_key=True)
+        name = Column(String(100), nullable=False)
+        lines = Column(Integer, nullable=False)
+        length = Column(Integer, nullable=False)
+        sensors = Column(Integer, nullable=False)
+        created_at = Column(TIMESTAMP, default=func.now())
+    
+    class SQLiteLine(BaseSQLite):
+        __tablename__ = 'logistics_lines'
+        line_id = Column(String(50), primary_key=True)
+        zone_id = Column(String(50), ForeignKey('logistics_zones.zone_id'), nullable=False)
+        length = Column(Integer, nullable=False)
+        sensors = Column(Integer, nullable=False)
+    
+    BaseSQLite.metadata.create_all(local_sqlite_engine)
+    
+    sqlite_session = LocalSQLiteSession()
+    try:
+        # 기존 데이터 삭제
+        sqlite_session.execute(delete(SQLiteLine))
+        sqlite_session.execute(delete(SQLiteZone))
+        sqlite_session.commit()
+        
+        # 새 데이터 삽입
+        for zone_data in zones_list:
+            zone = SQLiteZone(
+                zone_id=zone_data.zone_id,
+                name=zone_data.name,
+                lines=zone_data.lines,
+                length=zone_data.length,
+                sensors=zone_data.sensors
+            )
+            sqlite_session.add(zone)
+            
+            sensors_per_line = zone_data.sensors // zone_data.lines if zone_data.lines > 0 else 0
+            for i in range(zone_data.lines):
+                line_id = f"{zone_data.zone_id}-{i+1:03d}"
+                line = SQLiteLine(
+                    line_id=line_id,
+                    zone_id=zone_data.zone_id,
+                    length=zone_data.length,
+                    sensors=sensors_per_line
+                )
+                sqlite_session.add(line)
+        
+        sqlite_session.commit()
+        print("  ✅ SQLite 저장 완료")
+        
+    except Exception as e:
+        sqlite_session.rollback()
+        print(f"  ❌ SQLite 저장 실패: {e}")
+    finally:
+        sqlite_session.close()
+
+
+def _save_zones_to_azure(zones_list: List[LogisticsZoneCreate]):
+    """Azure PostgreSQL에 zones 저장"""
+    if not AzureSession:
+        return
+    
+    azure_session = AzureSession()
+    try:
+        # 기존 데이터 삭제
+        azure_session.execute("DELETE FROM logistics_lines")
+        azure_session.commit()
+        
+        # 새 데이터 삽입
+        for zone_data in zones_list:
+            zone = LogisticsZone(
+                zone_id=zone_data.zone_id,
+                name=zone_data.name,
+                lines=zone_data.lines,
+                length=zone_data.length,
+                sensors=zone_data.sensors
+            )
+            azure_session.add(zone)
+            
+            sensors_per_line = zone_data.sensors // zone_data.lines if zone_data.lines > 0 else 0
+            for i in range(zone_data.lines):
+                line_id = f"{zone_data.zone_id}-{i+1:03d}"
+                line = LogisticsLine(
+                    zone_id=zone_data.zone_id,
+                    line_id=line_id,
+                    length=zone_data.length,
+                    sensors=sensors_per_line
+                )
+                azure_session.add(line)
+        
+        azure_session.commit()
+        print("  ✅ Azure PostgreSQL 저장 완료")
+        
+    except Exception as e:
+        azure_session.rollback()
+        print(f"  ❌ Azure PostgreSQL 저장 실패: {e}")
+    finally:
+        azure_session.close()
 
 @app.post("/api/baskets/create")
 async def create_baskets(
@@ -521,33 +1285,138 @@ async def create_baskets(
                 basket_pool.expand_pool(expand_amount)
                 available_baskets = basket_pool.get_available_baskets()
     
-    # 바스켓 할당
-    created_baskets = []
+    # ============ 라인별 현재 용량 체크 (저장된 용량 정보 사용) ============
+    warnings = []
+    line_capacities = {}
+    for line_id in target_lines:
+        # 초기화 시 계산된 용량 정보 사용 (매번 재계산 방지)
+        capacity_info = line_capacity_info.get(line_id, {"max": 20, "length": 100})
+        max_capacity = capacity_info["max"]
+        
+        # 현재 해당 라인에 있는 바스켓 수 계산
+        current_baskets = [b for b in basket_pool.get_all_baskets().values() 
+                         if b.get('line_id') == line_id and b['status'] in ['moving', 'in_transit', 'deploying']]
+        current_count = len(current_baskets)
+        capacity_percent = (current_count / max_capacity * 100) if max_capacity > 0 else 0
+        
+        line_capacities[line_id] = {
+            "current": current_count,
+            "max": max_capacity,
+            "length": capacity_info["length"],
+            "percent": capacity_percent
+        }
+        
+        # 80% 이상 사용 중이면 경고 메시지 추가
+        if capacity_percent >= MAX_LINE_CAPACITY_PERCENT:
+            warnings.append(f"⚠️ {line_id} 라인 혼잡 ({capacity_percent:.0f}% 사용 중)")
+    
+    # 투입 큐에 추가 (즉시 투입하지 않고 큐에 넣음)
+    queued_baskets = []
+    destination = request_data.destination or request_data.zone_id
+    
     for i in range(request_data.count):
+        if i >= len(available_baskets):
+            break
+            
         basket = available_baskets[i]
         basket_id = basket["basket_id"]
         
-        # 라인 선택 (지정된 경우 하나만, 아니면 랜덤 로드 밸런싱)
-        selected_line_id = random.choice(target_lines)
+        # 라인 선택: 용량이 적은 라인 우선 (로드 밸런싱)
+        if request_data.line_id:
+            selected_line_id = request_data.line_id
+        else:
+            # 용량 퍼센트가 낮은 라인부터 선택
+            sorted_lines = sorted(target_lines, key=lambda lid: line_capacities.get(lid, {}).get("percent", 0))
+            selected_line_id = sorted_lines[i % len(sorted_lines)]
         
-        # assign_basket 호출: zone_id, line_id, destination 설정
-        destination = request_data.destination or request_data.zone_id
-        assigned_basket = basket_pool.assign_basket(
-            basket_id,
-            request_data.zone_id,
-            selected_line_id,
-            destination
-        )
+        # 투입 큐에 추가 (상태를 deploying으로 변경)
+        basket_pool.update_basket_status(basket_id, 'deploying')
+        deployment_queue.append({
+            "basket_id": basket_id,
+            "zone_id": request_data.zone_id,
+            "line_id": selected_line_id,
+            "destination": destination
+        })
         
-        if assigned_basket:
-            created_baskets.append(assigned_basket)
-            print(f"[바스켓 생성] {basket_id} assigned to {request_data.zone_id}-{selected_line_id} → {destination}")
+        queued_baskets.append({
+            "basket_id": basket_id,
+            "line_id": selected_line_id,
+            "status": "deploying"
+        })
+        print(f"[투입 큐 추가] {basket_id} → {selected_line_id} (대기열: {len(deployment_queue)})")
     
     return {
         "success": True,
-        "created_count": len(created_baskets),
-        "baskets": created_baskets,
-        "message": f"Successfully created {len(created_baskets)} baskets"
+        "queued_count": len(queued_baskets),
+        "baskets": queued_baskets,
+        "queue_length": len(deployment_queue),
+        "line_capacities": line_capacities,
+        "warnings": warnings,
+        "message": f"{len(queued_baskets)}개 바스켓이 투입 대기열에 추가되었습니다. 순차적으로 투입됩니다."
+    }
+    line_capacities = {}
+    for line_id in target_lines:
+        line = db.query(LogisticsLine).filter(LogisticsLine.line_id == line_id).first()
+        if line:
+            line_length = line.length if hasattr(line, 'length') else 100
+            max_capacity = int(line_length / 5)  # 5m 간격 기준 최대 용량
+            current_baskets = [b for b in basket_pool.get_all_baskets().values() 
+                             if b.get('line_id') == line_id and b['status'] in ['moving', 'in_transit', 'deploying']]
+            current_count = len(current_baskets)
+            capacity_percent = (current_count / max_capacity * 100) if max_capacity > 0 else 0
+            
+            line_capacities[line_id] = {
+                "current": current_count,
+                "max": max_capacity,
+                "percent": capacity_percent
+            }
+            
+            if capacity_percent >= MAX_LINE_CAPACITY_PERCENT:
+                warnings.append(f"⚠️ {line_id} 라인 혼잡 ({capacity_percent:.0f}% 사용 중)")
+    
+    # 투입 큐에 추가 (즉시 투입하지 않고 큐에 넣음)
+    queued_baskets = []
+    destination = request_data.destination or request_data.zone_id
+    
+    for i in range(request_data.count):
+        if i >= len(available_baskets):
+            break
+            
+        basket = available_baskets[i]
+        basket_id = basket["basket_id"]
+        
+        # 라인 선택: 용량이 적은 라인 우선 (로드 밸런싱)
+        if request_data.line_id:
+            selected_line_id = request_data.line_id
+        else:
+            # 용량 퍼센트가 낮은 라인부터 선택
+            sorted_lines = sorted(target_lines, key=lambda lid: line_capacities.get(lid, {}).get("percent", 0))
+            selected_line_id = sorted_lines[i % len(sorted_lines)]
+        
+        # 투입 큐에 추가 (상태를 deploying으로 변경)
+        basket_pool.update_basket_status(basket_id, 'deploying')
+        deployment_queue.append({
+            "basket_id": basket_id,
+            "zone_id": request_data.zone_id,
+            "line_id": selected_line_id,
+            "destination": destination
+        })
+        
+        queued_baskets.append({
+            "basket_id": basket_id,
+            "line_id": selected_line_id,
+            "status": "deploying"
+        })
+        print(f"[투입 큐 추가] {basket_id} → {selected_line_id} (대기열: {len(deployment_queue)})")
+    
+    return {
+        "success": True,
+        "queued_count": len(queued_baskets),
+        "baskets": queued_baskets,
+        "queue_length": len(deployment_queue),
+        "line_capacities": line_capacities,
+        "warnings": warnings,
+        "message": f"{len(queued_baskets)}개 바스켓이 투입 대기열에 추가되었습니다. 순차적으로 투입됩니다."
     }
 
 @app.get("/baskets")
@@ -568,15 +1437,7 @@ async def get_all_baskets(db: Session = Depends(data_db)):
             if zone:
                 basket_copy["line_length"] = zone.length
         
-        # 실시간 위치 정보 병합 (어댑터를 통해)
-        if sensor_adapter:
-            movement_sim = sensor_adapter.get_movement_simulator()
-            if movement_sim:
-                pos_info = movement_sim.get_basket_position(basket_copy["basket_id"])
-                if pos_info:
-                    basket_copy["position_meters"] = pos_info.get("position_meters", 0)
-                    basket_copy["progress_percent"] = pos_info.get("progress_percent", 0)
-                
+        # 실시간 위치 정보: EventHub를 통해 수신되는 센서 데이터로 업데이트됨
         enriched_baskets.append(basket_copy)
     stats = basket_pool.get_statistics()
     print(f"[API] /baskets 반환: {len(enriched_baskets)}개 바스켓, 통계: {stats} (프론트엔드 요청)")
@@ -602,137 +1463,277 @@ async def get_basket(basket_id: str):
 
 @app.get("/baskets/movements")
 async def get_basket_movements():
-    """현재 이동 중인 바스켓들의 실시간 위치 정보"""
-    if sensor_adapter:
-        movement_sim = sensor_adapter.get_movement_simulator()
-        if movement_sim:
-            return movement_sim.get_all_positions()
+    """현재 이동 중인 바스켓들의 실시간 위치 정보 (EventHub를 통해 수신되는 센서 데이터)"""
     return []
 
-# ============ 센서 시뮬레이터 제어 API ============
-
-@app.post("/simulator/start")
-async def start_simulator():
-    """센서 시뮬레이션 시작 (Kafka로 센서 데이터 전송)"""
-    global simulator_running
-    
-    if simulator_running:
-        return {
-            "status": "already_running",
-            "message": "센서 시뮬레이션이 이미 실행 중입니다.",
-            "running": True
-        }
-    
-    try:
-        if sensor_adapter:
-            sensor_adapter.start()
-        simulator_running = True
-        return {
-            "status": "started",
-            "message": "센서 시뮬레이션이 시작되었습니다.",
-            "running": True
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"시뮬레이션 시작 실패: {str(e)}",
-            "running": False
-        }
-
-@app.post("/simulator/stop")
-async def stop_simulator(request: Request):
-    """센서 시뮬레이션 중지 (Kafka로의 센서 데이터 전송 중지)"""
-    global simulator_running
-    
-    print(f"\n=== /simulator/stop API 호출 ===")
-    print(f"Method: {request.method}")
-    print(f"URL: {request.url}")
-    print(f"Client: {request.client}")
-    print(f"Headers: {dict(request.headers)}")
-    print(f"현재 simulator_running: {simulator_running}")
-    
-    if not simulator_running:
-        result = {
-            "status": "already_stopped",
-            "message": "센서 시뮬레이션이 이미 중지 상태입니다.",
-            "running": False
-        }
-        print(f"Result: {result}")
-        return result
-    
-    try:
-        if sensor_adapter:
-            sensor_adapter.stop()
-        simulator_running = False
-        result = {
-            "status": "stopped",
-            "message": "센서 시뮬레이션이 중지되었습니다.",
-            "running": False
-        }
-        print(f"Result: {result}")
-        return result
-    except Exception as e:
-        result = {
-            "status": "error",
-            "message": f"시뮬레이션 중지 실패: {str(e)}",
-            "running": True
-        }
-        print(f"Result: {result}")
-        return result
+# ============ EventHub Consumer 상태 API ============
 
 @app.get("/simulator/status")
-async def get_simulator_status():
-    """센서 시뮬레이션 상태 조회"""
+async def get_consumer_status():
+    """EventHub Consumer 상태 조회 및 라인별 속도 구간 정보 제공"""
     latest_time = None
     events_count = 0
-    if hasattr(consumer, 'latest_events') and consumer.latest_events:
+    if consumer and hasattr(consumer, 'latest_events') and consumer.latest_events:
         events_count = len(consumer.latest_events)
         if events_count > 0:
             latest_time = consumer.latest_events[-1].get("timestamp")
 
-    # 어댑터를 통해 상태 정보 가져오기
-    adapter_status = {}
-    if sensor_adapter:
-        adapter_status = sensor_adapter.get_status()
+    # 라인별 속도 구간 정보 추가
+    line_speed_zones = {}
+    if basket_pool and hasattr(basket_pool, 'line_speed_zones'):
+        line_speed_zones = basket_pool.line_speed_zones
 
     return {
-        "running": simulator_running,
+        "running": consumer.is_running if consumer and hasattr(consumer, 'is_running') else False,
         "events_received": events_count,
         "latest_event_time": latest_time,
-        "adapter_type": type(sensor_adapter).__name__ if sensor_adapter else None,
-        "line_speed_zones": adapter_status.get("line_speed_zones", {}) if adapter_status else {}
+        "adapter_type": "EventHub Consumer Only",
+        "message": "센서 데이터는 logistics-sensor-simulator 모듈에서 IoT Hub로 전송됩니다",
+        "line_speed_zones": line_speed_zones  # 구간별 속도 정보 추가
     }
 
-@app.post("/simulator/reset")
-async def reset_simulator():
-    """시뮬레이션 초기화 - 어댑터를 통해 리셋"""
-    global basket_pool, sensor_adapter
-    
-    if not basket_pool:
+@app.post("/simulator/start")
+async def start_simulator():
+    """
+    시뮬레이터 시작 - 센서 시뮬레이터 컨테이너의 API 호출
+    """
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # 센서 시뮬레이터 컨테이너는 Docker 네트워크 내에서 이름으로 접근
+            response = await client.post("http://logistics-sensor-simulator:5001/start")
+            result = response.json()
+            return result
+    except Exception as e:
+        print(f"[Simulator Control] 시작 실패: {e}")
         return {
             "status": "error",
-            "message": "Basket pool not initialized"
+            "message": f"시뮬레이터 시작 실패: {str(e)}",
+            "running": False
         }
-    
+
+@app.post("/simulator/stop")
+async def stop_simulator():
+    """
+    시뮬레이터 정지 - 센서 시뮬레이터 컨테이너의 API 호출
+    """
     try:
-        # 어댑터의 리셋 메서드 호출
-        if sensor_adapter:
-            sensor_adapter.reset()
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post("http://logistics-sensor-simulator:5001/stop")
+            result = response.json()
+            return result
+    except Exception as e:
+        print(f"[Simulator Control] 정지 실패: {e}")
+        return {
+            "status": "error",
+            "message": f"시뮬레이터 정지 실패: {str(e)}",
+            "running": True
+        }
+
+@app.post("/simulator/reset")
+async def reset_simulator(db: Session = Depends(data_db)):
+    """
+    시뮬레이터 초기화 - 바스켓 풀과 배포 큐 리셋
+    """
+    try:
+        global basket_pool, deployment_queue
         
-        stats = basket_pool.get_statistics()
-        print(f"[시뮬레이션 초기화] 어댑터 리셋 완료: {stats}")
+        # 바스켓 풀 초기화
+        if basket_pool:
+            basket_pool.baskets.clear()
+            basket_pool._initialize_pool()
+            print("[RESET] 바스켓 풀 초기화 완료")
+        
+        # 배포 큐 초기화
+        deployment_queue.clear()
+        print("[RESET] 배포 큐 초기화 완료")
         
         return {
             "status": "success",
-            "message": "시뮬레이션이 초기화되었습니다.",
-            "statistics": stats
+            "message": "시뮬레이터가 초기화되었습니다.",
+            "baskets_total": len(basket_pool.baskets) if basket_pool else 0
         }
     except Exception as e:
-        print(f"[시뮬레이션 초기화] 오류: {e}")
+        print(f"[Simulator Reset] 초기화 실패: {e}")
         return {
             "status": "error",
-            "message": f"초기화 실패: {str(e)}"
+            "message": f"시뮬레이터 초기화 실패: {str(e)}"
         }
+
+# ============ 프리셋 API (Azure PostgreSQL에서 읽기) ============
+
+@app.get("/presets")
+async def get_all_presets(db: Session = Depends(data_db)):
+    """현재 적용된 프리셋 조회"""
+    try:
+        preset_info = logis_data_db.get_current_preset(db)
+        
+        if not preset_info:
+            return {
+                "presets": [],
+                "message": "현재 적용된 프리셋이 없습니다. 프리셋을 적용해주세요."
+            }
+        
+        return {
+            "presets": [{
+                "preset_key": "current",
+                "preset_name": f"현재 설정 ({preset_info['total_zones']}개 존)",
+                "description": "Azure PostgreSQL에 저장된 현재 시설 구성",
+                "total_zones": preset_info['total_zones'],
+                "total_lines": preset_info['total_lines'],
+                "total_length_m": preset_info['total_length_m'],
+                "total_sensors": preset_info['total_sensors']
+            }]
+        }
+    except Exception as e:
+        print(f"❌ 프리셋 조회 실패: {e}")
+        return {
+            "status": "error",
+            "message": f"프리셋 조회 실패: {str(e)}"
+        }, 500
+
+@app.get("/presets/current")
+async def get_current_preset(db: Session = Depends(data_db)):
+    """현재 적용된 프리셋의 상세 정보 조회"""
+    try:
+        preset_info = logis_data_db.get_current_preset(db)
+        
+        if not preset_info:
+            return {
+                "error": "현재 적용된 프리셋이 없습니다",
+                "zones": []
+            }, 404
+        
+        return {
+            "preset_key": "current",
+            "preset_name": f"현재 설정 ({preset_info['total_zones']}개 존)",
+            "description": "Azure PostgreSQL에 저장된 현재 시설 구성",
+            "total_zones": preset_info['total_zones'],
+            "total_lines": preset_info['total_lines'],
+            "total_length_m": preset_info['total_length_m'],
+            "total_sensors": preset_info['total_sensors'],
+            "zones": preset_info['zones']
+        }
+    except Exception as e:
+        print(f"❌ 프리셋 상세 조회 실패: {e}")
+        return {
+            "status": "error",
+            "message": f"프리셋 상세 조회 실패: {str(e)}"
+        }, 500
+
+@app.delete("/presets/current")
+async def clear_preset(db: Session = Depends(data_db)):
+    """현재 프리셋 초기화 (모든 존/라인 삭제)"""
+    global basket_pool
+    
+    try:
+        # 1. 기존 데이터 삭제
+        logis_data_db.delete_all_lines(db)
+        logis_data_db.delete_all_zones(db)
+        
+        # 2. BasketPool 재초기화
+        initialize_basket_pool(db)
+        
+        print("✅ 프리셋 초기화 완료: 모든 존/라인 삭제")
+        
+        return {
+            "status": "success",
+            "message": "프리셋이 초기화되었습니다",
+            "zones_deleted": "모두"
+        }
+        
+    except Exception as e:
+        db.rollback()
+        print(f"❌ 프리셋 초기화 실패: {e}")
+        return {
+            "status": "error",
+            "message": f"프리셋 초기화 실패: {str(e)}"
+        }, 500
+
+# ============ Mock 센서 데이터 (테스트용) ============
+@app.post("/test/mock-sensor-event")
+async def mock_sensor_event(
+    zone_id: str,
+    signal: bool = True,
+    speed: int = 50
+):
+    """
+    테스트용: Mock 센서 이벤트를 EventHub Consumer의 latest_events에 추가
+    
+    실제 센서 데이터가 없을 때 병목 감지 테스트용
+    
+    Example: POST /test/mock-sensor-event?zone_id=01-PK&signal=true&speed=25
+    """
+    if not consumer:
+        return {
+            "status": "error",
+            "message": "EventHub Consumer가 활성화되지 않았습니다"
+        }, 400
+    
+    event_data = {
+        "timestamp": datetime.now().isoformat(),
+        "zone_id": zone_id,
+        "signal": signal,
+        "speed": speed
+    }
+    
+    # EventHub Consumer의 latest_events에 직접 추가
+    consumer.latest_events.append(event_data)
+    if len(consumer.latest_events) > consumer.max_events:
+        consumer.latest_events.pop(0)
+    
+    print(f"[MOCK] Mock 센서 이벤트 추가: zone_id={zone_id}, signal={signal}, speed={speed}")
+    
+    return {
+        "status": "success",
+        "message": f"Mock 이벤트 추가됨: {event_data}",
+        "total_events": len(consumer.latest_events)
+    }
+
+@app.post("/test/mock-sensor-burst")
+async def mock_sensor_burst(
+    zone_id: str,
+    count: int = 10,
+    signal: bool = True,
+    speed: int = 25
+):
+    """
+    테스트용: 다수의 Mock 센서 이벤트를 한번에 추가 (병목 감지 테스트)
+    
+    Example: POST /test/mock-sensor-burst?zone_id=01-PK&count=50&speed=20
+    """
+    if not consumer:
+        return {
+            "status": "error",
+            "message": "EventHub Consumer가 활성화되지 않았습니다"
+        }, 400
+    
+    added_count = 0
+    for i in range(count):
+        event_data = {
+            "timestamp": datetime.now().isoformat(),
+            "zone_id": zone_id,
+            "signal": signal,
+            "speed": speed,
+            "sequence": i + 1
+        }
+        
+        consumer.latest_events.append(event_data)
+        if len(consumer.latest_events) > consumer.max_events:
+            consumer.latest_events.pop(0)
+        added_count += 1
+    
+    print(f"[MOCK] Mock 센서 burst 완료: {added_count}개 이벤트 추가 (zone_id={zone_id}, speed={speed})")
+    
+    return {
+        "status": "success",
+        "message": f"Mock 이벤트 {added_count}개 추가됨",
+        "total_events": len(consumer.latest_events),
+        "zone_id": zone_id,
+        "speed": speed,
+        "signal": signal
+    }
 
 if __name__ == "__main__":
     import uvicorn

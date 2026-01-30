@@ -68,15 +68,18 @@ const VisualizationDebugPage = () => {
   const [baskets, setBaskets] = useState(null);
   const [movements, setMovements] = useState([]);
   const [events, setEvents] = useState([]);
+  const [eventhubMessages, setEventhubMessages] = useState([]);
   const [showActiveSensors, setShowActiveSensors] = useState(false);
+  const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://20.196.224.42:8000';
 
   const fetchData = async () => {
     try {
-      const [statusRes, basketsRes, movementsRes, eventsRes] = await Promise.all([
-        fetch('http://localhost:8000/simulator/status'),
-        fetch('http://localhost:8000/baskets'),
-        fetch('http://localhost:8000/baskets/movements'),
-        fetch(`http://localhost:8000/events/latest?count=20&only_active=${showActiveSensors}`)
+      const [statusRes, basketsRes, movementsRes, eventsRes, eventhubRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/simulator/status`),
+        fetch(`${API_BASE_URL}/baskets`),
+        fetch(`${API_BASE_URL}/baskets/movements`),
+        fetch(`${API_BASE_URL}/events/latest?count=20&only_active=${showActiveSensors}`),
+        fetch(`${API_BASE_URL}/debug/eventhub-messages?limit=20`)
       ]);
       
       if (statusRes.ok) setStatus(await statusRes.json());
@@ -88,6 +91,10 @@ const VisualizationDebugPage = () => {
       if (eventsRes.ok) {
         const eventsData = await eventsRes.json();
         setEvents(eventsData.events || []);
+      }
+      if (eventhubRes.ok) {
+        const eventhubData = await eventhubRes.json();
+        setEventhubMessages(eventhubData.messages || []);
       }
     } catch (err) {
       console.error("Debug fetch error:", err);
