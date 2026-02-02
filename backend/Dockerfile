@@ -11,12 +11,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY backend/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY backend/ .
-COPY sensor_simulator /app/sensor_simulator
+COPY . .
 
 # Clean Python cache
 RUN find . -type d -name __pycache__ -exec rm -r {} + 2>/dev/null || true

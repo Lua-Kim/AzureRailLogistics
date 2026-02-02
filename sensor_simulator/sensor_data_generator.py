@@ -280,7 +280,7 @@ class SensorDataGenerator:
         
         # [성능 최적화] 해당 구역의 바스켓 위치를 미리 조회하여 라인별로 그룹화
         # 매 센서마다 전체 바스켓을 조회하는 비효율(O(N*M))을 제거 -> O(N+M)으로 개선
-        baskets_in_zone = {} # {line_id: [pos_meters, ...]}
+        baskets_in_zone = {} # {line_id: [(basket_id, pos_meters), ...]}
         
         if self.basket_movement:
             with self.basket_movement.lock:
@@ -297,7 +297,7 @@ class SensorDataGenerator:
                         if lid and pos is not None:
                             if lid not in baskets_in_zone:
                                 baskets_in_zone[lid] = []
-                            baskets_in_zone[lid].append(pos)
+                            baskets_in_zone[lid].append((basket_id, pos))
 
         # 구역 내 모든 라인의 센서 상태 확인
         for line in lines:
@@ -320,10 +320,12 @@ class SensorDataGenerator:
                 # [최적화] 미리 분류된 바스켓 위치 목록에서만 검색 (훨씬 빠름)
                 signal = False
                 detected_position = None
-                for b_pos in line_basket_positions:
+                detected_basket_id = None
+                for basket_id, b_pos in line_basket_positions:
                     if abs(b_pos - sensor_pos) <= DETECTION_RANGE:
                         signal = True
                         detected_position = b_pos
+                        detected_basket_id = basket_id
                         break
                 
                 # 센서 위치에서의 속도 계수 조회
@@ -340,9 +342,11 @@ class SensorDataGenerator:
                     "zone_id": zone_id,
                     "line_id": line_id,
                     "sensor_id": sensor_id,
+                    "basket_id": detected_basket_id,
                     "signal": signal,
                     "timestamp": timestamp,
-                    "speed": 50.0 * speed_modifier if signal else 0.0
+                    "speed": 50.0 * speed_modifier if signal else 0.0,
+                    "position_x": sensor_pos
                 }
                 events.append(event)
                 

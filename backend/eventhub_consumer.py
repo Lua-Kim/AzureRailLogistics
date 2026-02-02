@@ -147,7 +147,9 @@ class SensorEventConsumer:
         thread.start()
     
     def _save_batch_to_db(self, events):
-        """배치를 DB에 저장 (별도 스레드에서 실행)"""
+        """센서 이벤트를 DB에 저장 (별도 스레드에서 실행)"""
+        print(f"\n[_save_batch_to_db] 함수 호출됨 - {len(events)}개 이벤트 저장 준비")
+        
         try:
             from database import SessionLocal
             from models import SensorEvent
@@ -157,28 +159,42 @@ class SensorEventConsumer:
             
             try:
                 sensor_events = []
-                for event_data in events:
-                    sensor_event = SensorEvent(
-                        timestamp=datetime.fromisoformat(event_data['timestamp']),
-                        zone_id=event_data.get('zone_id', ''),
-                        basket_id=event_data.get('basket_id'),
-                        sensor_id=event_data.get('sensor_id', ''),
-                        signal=event_data.get('signal', False),
-                        speed=event_data.get('speed', 0.0),
-                        position_x=event_data.get('position_x'),
-                        position_y=event_data.get('position_y')
-                    )
+                print(f"[_save_batch_to_db] 이벤트 변환 시작...")
+                
+                for i, event_data in enumerate(events):
+                    print(f"  [{i+1}/{len(events)}] timestamp={event_data.get('timestamp')}, zone_id={event_data.get('zone_id')}, basket_id={event_data.get('basket_id')}, sensor_id={event_data.get('sensor_id')}, signal={event_data.get('signal')}, speed={event_data.get('speed')}")
+                    
+                    sensor_kwargs = {
+                        "timestamp": datetime.fromisoformat(event_data["timestamp"]),
+                        "zone_id": event_data.get("zone_id", ""),
+                        "basket_id": event_data.get("basket_id"),
+                        "sensor_id": event_data.get("sensor_id", ""),
+                        "signal": event_data.get("signal", False),
+                        "speed": event_data.get("speed", 0.0),
+                    }
+
+                    # 구버전 모델 호환 (컬럼 존재할 때만 추가)
+                    if hasattr(SensorEvent, "position_x"):
+                        sensor_kwargs["position_x"] = event_data.get("position_x")
+
+                    sensor_event = SensorEvent(**sensor_kwargs)
                     sensor_events.append(sensor_event)
                 
+                print(f"[_save_batch_to_db] {len(sensor_events)}개 SensorEvent 객체 생성 완료")
+                print(f"[_save_batch_to_db] {len(sensor_events)}개 SensorEvent 객체 생성 완료")
+                
+                print(f"[_save_batch_to_db] DB add_all 시작...")
                 db.add_all(sensor_events)
+                print(f"[_save_batch_to_db] DB add_all 완료, commit 시작...")
                 db.commit()
                 print(f"✅ [{datetime.now().strftime('%H:%M:%S')}] {len(sensor_events)}개 이벤트 DB 저장 완료")
 
                 # 저장 직후 실제 DB에 데이터가 있는지 테스트
                 try:
-                    count = db.execute('SELECT COUNT(*) FROM sensor_events').scalar()
+                    from sqlalchemy import text
+                    count = db.execute(text('SELECT COUNT(*) FROM sensor_events')).scalar()
                     print(f"[TEST] sensor_events 테이블 row 수: {count}")
-                    last = db.execute('SELECT id, created_at FROM sensor_events ORDER BY id DESC LIMIT 1').fetchone()
+                    last = db.execute(text('SELECT id, created_at FROM sensor_events ORDER BY id DESC LIMIT 1')).fetchone()
                     if last:
                         print(f"[TEST] 가장 최근 row: id={last[0]}, created_at={last[1]}")
                 except Exception as test_e:

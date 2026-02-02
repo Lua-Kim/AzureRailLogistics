@@ -23,9 +23,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime
 
-# .env 파일 로드
+# .env 파일 로드 (Docker에서는 파일이 없을 수 있으므로 무시)
 env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
+else:
+    print(f"⚠️ .env 파일을 찾을 수 없습니다: {env_path}")
+    print("   Docker 환경변수 또는 시스템 환경변수를 사용합니다.")
 
 # 백엔드 폴더에 있는 basket_manager 임포트
 from basket_manager import BasketPool
@@ -825,8 +829,7 @@ async def get_sensor_events_from_db(
                 "sensor_id": e.sensor_id,
                 "signal": e.signal,
                 "speed": e.speed,
-                "position_x": e.position_x,
-                "position_y": e.position_y
+                "position_x": e.position_x
             }
             for e in events
         ]

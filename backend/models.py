@@ -54,7 +54,6 @@ class SensorEvent(Base):
     signal = Column(Boolean, default=False)                   # 신호 감지 여부
     speed = Column(Float, default=0.0)                        # 속도 (%)
     position_x = Column(Float, nullable=True)                 # X 좌표 (m)
-    position_y = Column(Float, nullable=True)                 # Y 좌표 (m)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     class Config:

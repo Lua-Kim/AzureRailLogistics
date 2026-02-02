@@ -309,7 +309,6 @@ CREATE INDEX idx_preset_zones_key ON preset_zones(preset_key);
   "basket_id": "basket_001",
   "line_id": "01-PK-001",
   "position_x": 120.5,
-  "position_y": 85.3,
   "speed_kmh": 15.2,
   "timestamp": "2026-01-29T12:34:56.789Z",
   "status": "in_transit"
@@ -437,7 +436,6 @@ sensor_data = {
     'basket_id': 'basket_001',
     'line_id': '01-PK-001',
     'position_x': 100.5,
-    'position_y': 50.3,
     'speed_kmh': 12.5,
     'timestamp': datetime.utcnow().isoformat() + 'Z',
     'status': 'in_transit'

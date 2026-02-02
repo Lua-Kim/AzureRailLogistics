@@ -59,12 +59,14 @@
                   }
                 },
                 "Env": [
-                  "KAFKA_BOOTSTRAP_SERVERS=kafka:29092",
                   "POSTGRES_HOST=postgres",
                   "POSTGRES_PORT=5432",
                   "POSTGRES_DB=logistics",
                   "POSTGRES_USER=admin",
-                  "POSTGRES_PASSWORD=!postgres16"
+                  "POSTGRES_PASSWORD=!postgres16",
+                  "EVENTHUB_CONNECTION_STRING=Endpoint=sb://iothub-ns-logisticsi-56622493-7b42442d3d.servicebus.windows.net/;SharedAccessKeyName=iothubowner;SharedAccessKey=S5JA7PlPzXQSjmvwdTe5cPYNpk1T9hHtqAIoTPfvU1k=;EntityPath=logisticsiothub",
+                  "EVENTHUB_CONSUMER_GROUP=$Default",
+                  "AZ_POSTGRE_DATABASE_URL=postgresql://logis_admin:!postgres16@psql-logistics-kr.postgres.database.azure.com:5432/logistics"
                 ]
               }
             }
@@ -78,7 +80,7 @@
               "image": "${MODULES.sensorSimulator}",
               "createOptions": {
                 "Env": [
-                  "KAFKA_BOOTSTRAP_SERVERS=kafka:29092"
+                  "IOT_HUB_DEVICE_CONNECTION_STRING=${IOT_HUB_CONNECTION_STRING}"
                 ]
               }
             }

@@ -51,3 +51,4 @@ docker-compose.yml
 deployment.json
 __pycache__/
 document/azure vm ssh.md
+deployment.template.json

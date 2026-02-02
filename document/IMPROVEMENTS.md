@@ -29,7 +29,7 @@ Event Hub → Backend → PostgreSQL (저장)
 ```
 
 **필요 작업**:
-- 새 테이블: `sensor_events` (timestamp, basket_id, position_x, position_y 등)
+- 새 테이블: `sensor_events` (timestamp, basket_id, position_x 등)
 - 배치 저장: 100개씩 묶어서 DB 저장
 - 인덱싱: timestamp, basket_id로 빠른 조회
 
@@ -133,7 +133,6 @@ from pydantic import BaseModel, Field, validator
 class BasketCreateRequest(BaseModel):
     line_id: str = Field(..., min_length=1, max_length=50)
     position_x: float = Field(..., ge=0, le=10000)
-    position_y: float = Field(..., ge=0, le=10000)
     
     @validator('line_id')
     def validate_line_id(cls, v):

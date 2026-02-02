@@ -136,26 +136,55 @@ const App = () => {
   // 초기 로드 시 시뮬레이터 상태 확인
   useEffect(() => {
     const checkSimulatorStatus = async () => {
+      console.log('[App] API_BASE_URL:', API_BASE_URL);
+      console.log('[App] 시뮬레이터 상태 확인 시작...');
       try {
         const res = await axios.get(`${API_BASE_URL}/simulator/status`);
+        console.log('[App] 시뮬레이터 상태 응답:', res.data);
         if (res.data) {
           setSimulatorRunning(res.data.running);
+          console.log('[App] 시뮬레이터 상태 설정:', res.data.running);
         }
       } catch (err) {
-        console.error('시뮬레이터 상태 확인 실패:', err);
+        console.error('[App] 시뮬레이터 상태 확인 실패:', err);
+        console.error('[App] 에러 상세:', err.response?.data || err.message);
       }
     };
     checkSimulatorStatus();
   }, [API_BASE_URL]);
 
   const handleSimulatorSwitch = async () => {
+    console.log('\n========== 시뮬레이터 버튼 클릭 ==========');
+    console.log('[App] 현재 상태:', simulatorRunning ? '실행중' : '중지');
+    console.log('[App] API_BASE_URL:', API_BASE_URL);
+    
     try {
       const endpoint = simulatorRunning ? '/simulator/stop' : '/simulator/start';
-      await axios.post(`${API_BASE_URL}${endpoint}`);
+      const fullUrl = `${API_BASE_URL}${endpoint}`;
+      
+      console.log('[App] 요청 보내는 중...');
+      console.log('[App] URL:', fullUrl);
+      console.log('[App] 동작:', simulatorRunning ? '중지 요청' : '시작 요청');
+      
+      const response = await axios.post(fullUrl);
+      
+      console.log('[App] ✅ 응답 성공:', response.data);
+      console.log('[App] 상태 변경:', simulatorRunning, '->', !simulatorRunning);
+      
       setSimulatorRunning(!simulatorRunning);
+      
+      console.log('[App] ✅ 시뮬레이터 제어 완료');
+      console.log('==========================================\n');
+      
     } catch (error) {
-      console.error('시뮬레이터 제어 실패:', error);
-      alert('시뮬레이터 제어 중 오류가 발생했습니다.');
+      console.error('\n========== 시뮬레이터 제어 실패 ==========');
+      console.error('[App] ❌ 에러 발생:', error);
+      console.error('[App] 에러 메시지:', error.message);
+      console.error('[App] 에러 응답:', error.response?.data);
+      console.error('[App] 에러 상태 코드:', error.response?.status);
+      console.error('==========================================\n');
+      
+      alert(`시뮬레이터 제어 실패: ${error.response?.data?.message || error.message}`);
     }
   };
 
@@ -177,7 +206,7 @@ const App = () => {
   return (
     <Router>
       <ThemeProvider theme={theme}>
-        <Container isFullscreen={false}>
+        <Container>
           {/* 사이드바 영역 */}
           <Sidebar>
             
