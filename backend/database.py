@@ -21,13 +21,15 @@ print("[DB] ✅ Azure PostgreSQL에만 연결합니다.")
 print(f"[DB] Server: {AZ_POSTGRE_DATABASE_URL.split('@')[1].split('/')[0]}")
 
 # Azure PostgreSQL은 SSL 필수
+# 연결 풀 크기 최적화 (Azure PostgreSQL 제한: 기본 100개)
 engine = create_engine(
     AZ_POSTGRE_DATABASE_URL, 
     echo=False, 
-    pool_size=10, 
-    max_overflow=20, 
-    pool_pre_ping=True,
-    connect_args={"sslmode": "require"}
+    pool_size=5,  # 활성 연결 수
+    max_overflow=10,  # 추가 연결 가능 수
+    pool_recycle=3600,  # 1시간마다 연결 재생성 (Azure 연결 타임아웃 대비)
+    pool_pre_ping=True,  # 사용 전 연결 상태 확인
+    connect_args={"sslmode": "require", "connect_timeout": 10}
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

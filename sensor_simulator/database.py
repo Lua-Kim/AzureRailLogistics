@@ -8,13 +8,22 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-# PostgreSQL 연결 설정 (환경 변수에서만 읽음)
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Azure PostgreSQL 연결 (백엔드와 동일)
+AZ_POSTGRE_DATABASE_URL = os.getenv("AZ_POSTGRE_DATABASE_URL")
 
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL 환경 변수가 설정되지 않았습니다. .env 파일을 확인하세요.")
+if not AZ_POSTGRE_DATABASE_URL:
+    raise ValueError("AZ_POSTGRE_DATABASE_URL 환경 변수가 설정되지 않았습니다. .env 파일을 확인하세요.")
 
-engine = create_engine(DATABASE_URL, echo=False, pool_size=5, max_overflow=10, pool_pre_ping=True)
+# 연결 풀 설정
+engine = create_engine(
+    AZ_POSTGRE_DATABASE_URL, 
+    echo=False, 
+    pool_size=5, 
+    max_overflow=10,
+    pool_recycle=3600,  # 1시간마다 연결 재생성
+    pool_pre_ping=True,
+    connect_args={"sslmode": "require", "connect_timeout": 10}
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

@@ -217,11 +217,32 @@ const GuidePanel = styled.div`
   background: linear-gradient(135deg, ${props => props.theme.colors.surface} 0%, ${props => props.theme.colors.surfaceHighlight} 100%);
   border: 1px solid ${props => props.theme.colors.border};
   border-radius: 12px;
-  padding: 16px 20px;
+  padding: ${props => props.$isExpanded ? '16px 20px' : '12px 16px'};
+  transition: all 0.3s ease;
+  max-height: ${props => props.$isExpanded ? '600px' : '50px'};
+  overflow: hidden;
+`;
+
+const GuidePanelHeader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  
+  &:hover {
+    opacity: 0.8;
+  }
+`;
+
+const GuidePanelContent = styled.div`
   display: flex;
   gap: 32px;
-  align-items: center;
+  align-items: flex-start;
   flex-wrap: wrap;
+  margin-top: ${props => props.$isExpanded ? '12px' : '0'};
+  opacity: ${props => props.$isExpanded ? 1 : 0};
+  transition: opacity 0.3s ease;
 `;
 
 const GuideTitle = styled.div`
@@ -282,8 +303,8 @@ const RuleText = styled.div`
 
 const Stats = styled.div`
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
   margin-top: 16px;
 `;
 
@@ -291,22 +312,66 @@ const StatCard = styled.div`
   background-color: ${props => props.theme.colors.surface};
   border: 1px solid ${props => props.theme.colors.border};
   border-radius: 8px;
-  padding: 12px;
+  padding: 8px 10px;
   text-align: center;
 `;
 
 const StatLabel = styled.div`
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   color: ${props => props.theme.colors.text.muted};
   text-transform: uppercase;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 `;
 
 const StatValue = styled.div`
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 900;
   color: ${props => props.theme.colors.primary};
+`;
+
+const BottleneckContainer = styled.div`
+  background-color: rgba(239, 68, 68, 0.05);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 16px;
+`;
+
+const BottleneckTitle = styled.div`
+  font-size: 11px;
+  font-weight: 900;
+  color: #ef4444;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`;
+
+const BottleneckList = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+`;
+
+const BottleneckItem = styled.div`
+  background-color: ${props => props.theme.colors.surface};
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 10px;
+  color: ${props => props.theme.colors.text.main};
+  
+  .zone-id {
+    font-weight: 700;
+    color: #ef4444;
+  }
+  
+  .count {
+    font-weight: 700;
+    color: #ef4444;
+    margin-left: 4px;
+  }
 `;
 
 const BasketVisualizationPage = () => {
@@ -316,8 +381,9 @@ const BasketVisualizationPage = () => {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [basketCount, setBasketCount] = useState(5);
   const [lineSpeedZones, setLineSpeedZones] = useState({});
-  const [lineCapacities, setLineCapacities] = useState({}); // 라인 용량 정보 상태 추가
-  const [bottlenecksByZone, setBottlenecksByZone] = useState({}); // 병목 정보 상태 추가
+  const [lineCapacities, setLineCapacities] = useState({});
+  const [bottlenecksByZone, setBottlenecksByZone] = useState({});
+  const [showGuide, setShowGuide] = useState(false); // 가이드 토글 상태
 
   const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -492,74 +558,87 @@ const BasketVisualizationPage = () => {
         </Controls>
       </Header>
 
-      <GuidePanel>
-        <div>
-          <GuideTitle>📊 시각화 가이드</GuideTitle>
-          <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
-            <GuideItem>
-              <ColorBox $color="rgba(251, 191, 36, 0.5)" />
-              <span><strong>느린 구간</strong> (0.5x 속도)</span>
-            </GuideItem>
-            <GuideItem>
-              <ColorBox $color="rgba(229, 231, 235, 1)" />
-              <span><strong>보통 구간</strong> (1.0x 속도)</span>
-            </GuideItem>
-            <GuideItem>
-              <ColorBox $color="rgba(16, 185, 129, 0.5)" />
-              <span><strong>빠른 구간</strong> (1.5x 속도)</span>
-            </GuideItem>
-            <GuideItem>
-              <ColorBox $color="linear-gradient(135deg, #3b82f6, #2563eb)" />
-              <span><strong>정상 바스켓</strong> (이동 중)</span>
-            </GuideItem>
-            <GuideItem>
-              <ColorBox $color="linear-gradient(135deg, #ef4444, #dc2626)" />
-              <span><strong>병목 바스켓</strong> (정지 상태)</span>
-            </GuideItem>
+      <GuidePanel $isExpanded={showGuide}>
+        <GuidePanelHeader onClick={() => setShowGuide(!showGuide)}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+            <span style={{ fontSize: '13px', fontWeight: '900' }}>
+              {showGuide ? '📖 가이드 닫기' : '📖 가이드 보기'}
+            </span>
           </div>
-        </div>
+          <span style={{ fontSize: '18px', transition: 'transform 0.3s ease', transform: showGuide ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+            ▼
+          </span>
+        </GuidePanelHeader>
 
-        {/* 투입 규칙 섹션 추가 */}
-        <div>
-          <GuideTitle>📝 바스켓 투입 규칙</GuideTitle>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <RuleItem>
-              <RuleNumber>1</RuleNumber>
-              <RuleText>
-                <strong>순차 투입:</strong> 버튼 클릭 시 즉시 투입되지 않고, 
-                <span style={{color: '#3b82f6', fontWeight: 'bold'}}> 대기열</span>에 추가됩니다.
-              </RuleText>
-            </RuleItem>
-            <RuleItem>
-              <RuleNumber>2</RuleNumber>
-              <RuleText>
-                <strong>라인 분산:</strong> 여러 라인이 있을 경우, 
-                <span style={{color: '#10b981', fontWeight: 'bold'}}> 혼잡도가 낮은</span> 라인부터 자동 배분됩니다.
-              </RuleText>
-            </RuleItem>
-            <RuleItem>
-              <RuleNumber>3</RuleNumber>
-              <RuleText>
-                <strong>충돌 방지:</strong> 같은 라인에 
-                <span style={{color: '#f59e0b', fontWeight: 'bold'}}> 0.8초 간격</span>으로 투입되어 충돌을 방지합니다.
-              </RuleText>
-            </RuleItem>
-            <RuleItem>
-              <RuleNumber>4</RuleNumber>
-              <RuleText>
-                <strong>용량 경고:</strong> 라인 용량이 
-                <span style={{color: '#ef4444', fontWeight: 'bold'}}> 80% 이상</span>일 경우 경고 메시지가 표시됩니다.
-              </RuleText>
-            </RuleItem>
-            <RuleItem>
-              <RuleNumber>5</RuleNumber>
-              <RuleText>
-                <strong>구간별 속도:</strong> 바스켓은 각 구간의 속도 계수에 따라 
-                <span style={{color: '#8b5cf6', fontWeight: 'bold'}}> 가변 속도</span>로 이동합니다.
-              </RuleText>
-            </RuleItem>
+        <GuidePanelContent $isExpanded={showGuide}>
+          <div>
+            <GuideTitle>📊 시각화 가이드</GuideTitle>
+            <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
+              <GuideItem>
+                <ColorBox $color="rgba(251, 191, 36, 0.5)" />
+                <span><strong>느린 구간</strong> (0.5x 속도)</span>
+              </GuideItem>
+              <GuideItem>
+                <ColorBox $color="rgba(229, 231, 235, 1)" />
+                <span><strong>보통 구간</strong> (1.0x 속도)</span>
+              </GuideItem>
+              <GuideItem>
+                <ColorBox $color="rgba(16, 185, 129, 0.5)" />
+                <span><strong>빠른 구간</strong> (1.5x 속도)</span>
+              </GuideItem>
+              <GuideItem>
+                <ColorBox $color="linear-gradient(135deg, #3b82f6, #2563eb)" />
+                <span><strong>정상 바스켓</strong> (이동 중)</span>
+              </GuideItem>
+              <GuideItem>
+                <ColorBox $color="linear-gradient(135deg, #ef4444, #dc2626)" />
+                <span><strong>병목 바스켓</strong> (정지 상태)</span>
+              </GuideItem>
+            </div>
           </div>
-        </div>
+
+          {/* 투입 규칙 섹션 추가 */}
+          <div>
+            <GuideTitle>📝 바스켓 투입 규칙</GuideTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <RuleItem>
+                <RuleNumber>1</RuleNumber>
+                <RuleText>
+                  <strong>순차 투입:</strong> 버튼 클릭 시 즉시 투입되지 않고, 
+                  <span style={{color: '#3b82f6', fontWeight: 'bold'}}> 대기열</span>에 추가됩니다.
+                </RuleText>
+              </RuleItem>
+              <RuleItem>
+                <RuleNumber>2</RuleNumber>
+                <RuleText>
+                  <strong>라인 분산:</strong> 여러 라인이 있을 경우, 
+                  <span style={{color: '#10b981', fontWeight: 'bold'}}> 혼잡도가 낮은</span> 라인부터 자동 배분됩니다.
+                </RuleText>
+              </RuleItem>
+              <RuleItem>
+                <RuleNumber>3</RuleNumber>
+                <RuleText>
+                  <strong>충돌 방지:</strong> 같은 라인에 
+                  <span style={{color: '#f59e0b', fontWeight: 'bold'}}> 0.8초 간격</span>으로 투입되어 충돌을 방지합니다.
+                </RuleText>
+              </RuleItem>
+              <RuleItem>
+                <RuleNumber>4</RuleNumber>
+                <RuleText>
+                  <strong>용량 경고:</strong> 라인 용량이 
+                  <span style={{color: '#ef4444', fontWeight: 'bold'}}> 80% 이상</span>일 경우 경고 메시지가 표시됩니다.
+                </RuleText>
+              </RuleItem>
+              <RuleItem>
+                <RuleNumber>5</RuleNumber>
+                <RuleText>
+                  <strong>구간별 속도:</strong> 바스켓은 각 구간의 속도 계수에 따라 
+                  <span style={{color: '#8b5cf6', fontWeight: 'bold'}}> 가변 속도</span>로 이동합니다.
+                </RuleText>
+              </RuleItem>
+            </div>
+          </div>
+        </GuidePanelContent>
       </GuidePanel>
 
       <Stats>
@@ -585,47 +664,39 @@ const BasketVisualizationPage = () => {
         </StatCard>
       </Stats>
 
-      {/* 병목 정보 섹션 */}
-      {Object.keys(bottlenecksByZone).length > 0 && (
-        <Stats style={{ marginTop: '20px', backgroundColor: 'rgba(239, 68, 68, 0.05)', padding: '16px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-          <div style={{ gridColumn: '1 / -1', marginBottom: '12px' }}>
-            <StatLabel style={{ color: '#ef4444', fontSize: '12px', fontWeight: '900' }}>⚠️ 병목 감지 정보</StatLabel>
-          </div>
-          {Object.entries(bottlenecksByZone).map(([zoneId, bottleneckData]) => (
-            <StatCard key={zoneId} style={{ borderColor: 'rgba(239, 68, 68, 0.3)' }}>
-              <StatLabel>{zoneId}</StatLabel>
-              <StatValue style={{ color: '#ef4444' }}>
-                {bottleneckData.bottleneck_count || 0}개
-              </StatValue>
-              {bottleneckData.bottleneck_baskets && bottleneckData.bottleneck_baskets.length > 0 && (
-                <div style={{ 
-                  fontSize: '11px', 
-                  color: '#6b7280', 
-                  marginTop: '8px', 
-                  paddingTop: '8px', 
-                  borderTop: '1px solid rgba(0,0,0,0.1)',
-                  textAlign: 'left',
-                  maxHeight: '60px',
-                  overflowY: 'auto'
-                }}>
-                  <strong style={{ color: '#ef4444' }}>병목 바스켓:</strong><br />
-                  {bottleneckData.bottleneck_baskets.slice(0, 5).join(', ')}
-                  {bottleneckData.bottleneck_baskets.length > 5 && ` +${bottleneckData.bottleneck_baskets.length - 5}개`}
-                </div>
-              )}
-            </StatCard>
-          ))}
-        </Stats>
-      )}
+      {/* 병목 정보 섹션 - 이제 각 zone 옆에 표시됨 */}
 
       <VisualizationContainer>
         {zones.map((zone) => {
           const zoneBaskets = basketsByZone[zone.zone_id]?.baskets || [];
           const lines = zone.zone_lines || [];
+          const zoneBottlenecks = bottlenecksByZone[zone.zone_id];
 
           return (
             <ZoneContainer key={zone.zone_id}>
-              <ZoneTitle>{zone.zone_id} - {zone.zone_name}</ZoneTitle>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+                <ZoneTitle>{zone.zone_id} - {zone.zone_name}</ZoneTitle>
+                {zoneBottlenecks && zoneBottlenecks.bottleneck_count > 0 && (
+                  <div style={{ 
+                    background: 'rgba(239, 68, 68, 0.1)', 
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    borderRadius: '6px',
+                    padding: '4px 10px',
+                    fontSize: '12px',
+                    fontWeight: '700',
+                    color: '#ef4444',
+                    whiteSpace: 'nowrap'
+                  }}>
+                    ⚠️ 병목: {zoneBottlenecks.bottleneck_count}개
+                    {zoneBottlenecks.bottleneck_baskets && zoneBottlenecks.bottleneck_baskets.length > 0 && (
+                      <div style={{ fontSize: '11px', fontWeight: '600', marginTop: '2px' }}>
+                        {zoneBottlenecks.bottleneck_baskets.slice(0, 8).join(', ')}
+                        {zoneBottlenecks.bottleneck_baskets.length > 8 && '...'}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               <ZoneInfo>
                 라인: {lines.length}개 | 바스켓: {zoneBaskets.length}개 | 센서: {zone.sensors || 0}개
               </ZoneInfo>

@@ -1500,15 +1500,21 @@ async def start_simulator():
     """
     시뮬레이터 시작 - 센서 시뮬레이터 컨테이너의 API 호출
     """
+    print("[Simulator Control] 🔵 /simulator/start 요청 수신")
     try:
         import httpx
+        print("[Simulator Control] localhost:5001로 센서 시뮬레이터 시작 요청 중...")
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # 센서 시뮬레이터 컨테이너는 Docker 네트워크 내에서 이름으로 접근
-            response = await client.post("http://logistics-sensor-simulator:5001/start")
+            # localhost로 접근 (두 컨테이너 모두 host network 사용)
+            response = await client.post("http://localhost:5001/simulator/start")
+            print(f"[Simulator Control] 응답 상태: {response.status_code}")
             result = response.json()
+            print(f"[Simulator Control] ✅ 시작 완료: {result}")
             return result
     except Exception as e:
-        print(f"[Simulator Control] 시작 실패: {e}")
+        print(f"[Simulator Control] ❌ 시작 실패: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "status": "error",
             "message": f"시뮬레이터 시작 실패: {str(e)}",
@@ -1520,17 +1526,23 @@ async def stop_simulator():
     """
     시뮬레이터 정지 - 센서 시뮬레이터 컨테이너의 API 호출
     """
+    print("[Simulator Control] 🔴 /simulator/stop 요청 수신")
     try:
         import httpx
+        print("[Simulator Control] localhost:5001로 센서 시뮬레이터 중지 요청 중...")
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post("http://logistics-sensor-simulator:5001/stop")
+            response = await client.post("http://localhost:5001/simulator/stop")
+            print(f"[Simulator Control] 응답 상태: {response.status_code}")
             result = response.json()
+            print(f"[Simulator Control] ✅ 중지 완료: {result}")
             return result
     except Exception as e:
-        print(f"[Simulator Control] 정지 실패: {e}")
+        print(f"[Simulator Control] ❌ 중지 실패: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "status": "error",
-            "message": f"시뮬레이터 정지 실패: {str(e)}",
+            "message": f"시뮬레이터 중지 실패: {str(e)}",
             "running": True
         }
 

@@ -2,12 +2,15 @@ import time
 import json
 import threading
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from azure.iot.device import IoTHubDeviceClient, Message
 from azure.identity import DefaultAzureCredential
 from azure.core.credentials import AccessToken
 import ssl
 import urllib.parse
+
+# 센�울 시간대 설정 (UTC+9)
+KST = timezone(timedelta(hours=9))
 
 # 센서_시뮬레이터의 database 모듈 import
 try:
@@ -264,7 +267,8 @@ class SensorDataGenerator:
         if not zone_data:
             return []
             
-        timestamp = datetime.now().isoformat()
+        # 한국 시간(KST)으로 timestamp 생성
+        timestamp = datetime.now(KST).isoformat()
         lines = zone_data.get("lines", [])
         
         # [Fix] lines가 int인 경우 list로 변환 (구버전 DB 호환 및 방어 코드)

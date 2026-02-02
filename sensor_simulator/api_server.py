@@ -57,7 +57,7 @@ async def root():
         "service": "Sensor Simulator Control API"
     }
 
-@app.get("/status")
+@app.get("/simulator/status")
 async def get_status():
     """시뮬레이터 상태 조회"""
     if generator is None:
@@ -73,7 +73,7 @@ async def get_status():
         "message": "시뮬레이터 정상 동작 중" if generator.is_running else "시뮬레이터 정지됨"
     }
 
-@app.post("/start")
+@app.post("/simulator/start")
 async def start_simulator():
     """시뮬레이터 시작"""
     if generator is None:
@@ -99,7 +99,7 @@ async def start_simulator():
             "running": False
         }
 
-@app.post("/stop")
+@app.post("/simulator/stop")
 async def stop_simulator():
     """시뮬레이터 정지"""
     if generator is None:
@@ -128,7 +128,7 @@ async def stop_simulator():
             "running": generator.is_running
         }
 
-@app.post("/reset")
+@app.post("/simulator/reset")
 async def reset_simulator():
     """시뮬레이터 초기화 (재시작)"""
     global generator, basket_pool

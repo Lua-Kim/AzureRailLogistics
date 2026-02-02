@@ -53,11 +53,18 @@ ssh -i $SSH_KEY azureuser@${VM_IP} "sudo iotedge restart logistics-backend; sudo
 Start-Sleep -Seconds 5
 Write-Host "  ✅ 모듈 재시작 완료" -ForegroundColor Green
 
-# 6. 상태 확인
-Write-Host "`n========================================" -ForegroundColor Cyan
-Write-Host "배포 완료! 모듈 상태 확인:" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-ssh -i $SSH_KEY azureuser@${VM_IP} "sudo iotedge list"
+# 6. deployment.json 생성 (환경 변수 치환)
+Write-Host "`n[6/6] Deployment 설정 생성 중..." -ForegroundColor Yellow
+python convert_deployment.py
+if ($LASTEXITCODE -ne 0) { throw "Deployment.json 생성 실패" }
+Write-Host "  ✅ Deployment.json 생성 완료" -ForegroundColor Green
 
-Write-Host "`n✅ 배포 성공!" -ForegroundColor Green
+# 7. VM에 deployment.json 복사 및 적용
+Write-Host "`n[7/7] VM에 설정 적용 중..." -ForegroundColor Yellow
+scp -i $SSH_KEY deployment.json azureuser@${VM_IP}:/tmp/deployment.json
+ssh -i $SSH_KEY azureuser@${VM_IP} "sudo cp /tmp/deployment.json /etc/iotedge/config/deployment.json && sudo systemctl restart iotedge"
+Start-Sleep -Seconds 10
+Write-Host "  ✅ 설정 적용 완료" -ForegroundColor Green
+
+# 8. 상태 확인
 Write-Host "로그 확인: ssh -i '$SSH_KEY' azureuser@${VM_IP} 'sudo iotedge logs logistics-backend -f'" -ForegroundColor Gray
