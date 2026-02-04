@@ -2,6 +2,9 @@ version: '3.8'
 
 services:
   backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     image: azcr01.azurecr.io/logistics-backend:latest
     container_name: logistics-backend
     ports:
@@ -23,6 +26,9 @@ services:
 
   
   simulator:
+    build:
+      context: ./sensor_simulator
+      dockerfile: Dockerfile
     image: azcr01.azurecr.io/logistics-simulator:latest
     container_name: logistics-simulator
     ports:
