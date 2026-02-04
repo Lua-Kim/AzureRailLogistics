@@ -7,20 +7,28 @@ const GlobalStyle = createGlobalStyle`
     padding: 0;
   }
 
+
+
   body {
     background-color: ${props => props.theme.colors.background};
     color: ${props => props.theme.colors.text.main};
     font-family: ${props => props.theme.fonts.main};
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    overflow: hidden;
   }
 
-  /* 전체 스크롤바 스타일 통일 */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+  #root {
+    height: 100%;
+    width: 100%;
   }
+  /* 전체 페이지 스크롤 방지 */
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden; /* 이 부분이 핵심입니다. 중복 스크롤을 없앱니다. */
+  }
+
   ::-webkit-scrollbar-track {
     background: transparent;
   }

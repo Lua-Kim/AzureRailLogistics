@@ -50,33 +50,21 @@ else:
     AzureSession = None
     print("⚠️ AZ_POSTGRE_DATABASE_URL 없음 - Azure 동기화 비활성화")
 
+# Sensor simulator control API base URL
+SIMULATOR_API_BASE = os.getenv("SIMULATOR_API_BASE", "http://localhost:5001")
+# Sensor simulator API timeout (seconds)
+SIMULATOR_API_TIMEOUT = float(os.getenv("SIMULATOR_API_TIMEOUT", "30"))
+
 app = FastAPI(title="Azure Rail Logistics Backend")
 
-# 모든 요청 로깅 미들웨어
+# 요청 로깅 미들웨어 (최소화: 에러만 로깅)
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """모든 HTTP 요청 로깅"""
-    xff = request.headers.get("x-forwarded-for")
-    xri = request.headers.get("x-real-ip")
-
-    if xff:
-        client_ip = xff.split(",")[0].strip()
-        client_port = "unknown"
-        source = "xff"
-    elif xri:
-        client_ip = xri.strip()
-        client_port = "unknown"
-        source = "x-real-ip"
-    else:
-        client_ip = request.client.host if request.client else "unknown"
-        client_port = request.client.port if request.client else "unknown"
-        source = "client"
-
-    print(
-        f"\n>>> 요청: {request.method} {request.url.path} from {client_ip}:{client_port} ({source})"
-    )
+    """최소한의 HTTP 요청 로깅"""
     response = await call_next(request)
-    print(f"<<< 응답: {response.status_code}")
+    # 에러 응답만 로깅
+    if response.status_code >= 400:
+        print(f"[API] ❌ {request.method} {request.url.path}: {response.status_code}")
     return response
 
 # CORS 설정
@@ -152,8 +140,8 @@ def initialize_basket_pool(db: Session):
         }
         zones_lines_config.append(zone_config)
     
-    # BasketPool 초기화 (zones_lines_config 전달)
-    basket_pool = BasketPool(pool_size=1000, zones_lines_config=zones_lines_config)
+    # BasketPool 초기화 (zones_lines_config 전달) - 풀 크기 축소 (필요시 확장)
+    basket_pool = BasketPool(pool_size=20, zones_lines_config=zones_lines_config)
     
     # ============ 라인별 최대 수용량 계산 (초기화 시 1회만) ============
     # BASKET_SPACING_M 간격 기준으로 각 라인이 수용할 수 있는 최대 바스켓 수 계산
@@ -244,7 +232,6 @@ async def update_basket_positions_task():
     4. 새 위치 계산 후 라인 끝 도달 시 'arrived' 상태로 전환
     5. 앞 바스켓 때문에 이동이 멈춘 경우 병목 플래그 설정
     """
-    print("[위치 업데이터] 바스켓 이동 시스템 가동 (Delta Time 적용)")
     last_time = time.time()
     
     while True:
@@ -256,8 +243,7 @@ async def update_basket_positions_task():
             
             # 디버깅 등으로 인해 멈췄다가 실행될 때 순간이동 방지 (최대 0.2초로 보정)
             if dt > 0.5:
-                dt = 0.1
-                print(f"[위치 업데이터] 과도한 dt 감지 ({current_time - last_time:.2f}s) -> 0.1s로 보정") 
+                dt = 0.1 
 
             if basket_pool and hasattr(basket_pool, 'base_speed_mps'):
                 baskets = basket_pool.get_all_baskets()
@@ -1503,10 +1489,10 @@ async def start_simulator():
     print("[Simulator Control] 🔵 /simulator/start 요청 수신")
     try:
         import httpx
-        print("[Simulator Control] localhost:5001로 센서 시뮬레이터 시작 요청 중...")
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        print(f"[Simulator Control] {SIMULATOR_API_BASE}로 센서 시뮬레이터 시작 요청 중...")
+        async with httpx.AsyncClient(timeout=SIMULATOR_API_TIMEOUT) as client:
             # localhost로 접근 (두 컨테이너 모두 host network 사용)
-            response = await client.post("http://localhost:5001/simulator/start")
+            response = await client.post(f"{SIMULATOR_API_BASE}/simulator/start")
             print(f"[Simulator Control] 응답 상태: {response.status_code}")
             result = response.json()
             print(f"[Simulator Control] ✅ 시작 완료: {result}")
@@ -1532,9 +1518,9 @@ async def stop_simulator():
     print("[Simulator Control] 🔴 /simulator/stop 요청 수신")
     try:
         import httpx
-        print("[Simulator Control] localhost:5001로 센서 시뮬레이터 중지 요청 중...")
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post("http://localhost:5001/simulator/stop")
+        print(f"[Simulator Control] {SIMULATOR_API_BASE}로 센서 시뮬레이터 중지 요청 중...")
+        async with httpx.AsyncClient(timeout=SIMULATOR_API_TIMEOUT) as client:
+            response = await client.post(f"{SIMULATOR_API_BASE}/simulator/stop")
             print(f"[Simulator Control] 응답 상태: {response.status_code}")
             result = response.json()
             print(f"[Simulator Control] ✅ 중지 완료: {result}")
@@ -1649,77 +1635,6 @@ async def get_all_presets(db: Session = Depends(data_db)):
             }
         )
 
-@app.get("/presets/current")
-async def get_current_preset(db: Session = Depends(data_db)):
-    """현재 적용된 프리셋의 상세 정보 조회"""
-    try:
-        preset_info = logis_data_db.get_current_preset(db)
-        
-        if not preset_info:
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "error": "현재 적용된 프리셋이 없습니다",
-                    "zones": []
-                }
-            )
-        
-        return {
-            "preset_key": "current",
-            "preset_name": f"현재 설정 ({preset_info['total_zones']}개 존)",
-            "description": "Azure PostgreSQL에 저장된 현재 시설 구성",
-            "total_zones": preset_info['total_zones'],
-            "total_lines": preset_info['total_lines'],
-            "total_length_m": preset_info['total_length_m'],
-            "total_sensors": preset_info['total_sensors'],
-            "zones": preset_info['zones']
-        }
-    except Exception as e:
-        print(f"❌ 프리셋 상세 조회 실패: {e}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "message": f"프리셋 상세 조회 실패: {str(e)}"
-            }
-        )
-
-@app.delete("/presets/current")
-async def clear_preset(db: Session = Depends(data_db)):
-    """현재 프리셋 초기화 (모든 존/라인 삭제)"""
-    global basket_pool
-    
-    try:
-        # 1. 기존 데이터 삭제
-        logis_data_db.delete_all_lines(db)
-        logis_data_db.delete_all_zones(db)
-        
-        # 2. BasketPool 재초기화
-        initialize_basket_pool(db)
-        
-        print("✅ 프리셋 초기화 완료: 모든 존/라인 삭제")
-        
-        return {
-            "status": "success",
-            "message": "프리셋이 초기화되었습니다",
-            "zones_deleted": "모두"
-        }
-        
-    except Exception as e:
-        db.rollback()
-        print(f"❌ 프리셋 초기화 실패: {e}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "message": f"프리셋 초기화 실패: {str(e)}"
-            }
-        )
-
 @app.post("/presets/{preset_key}/apply")
 async def apply_preset(preset_key: str, db: Session = Depends(data_db)):
     """프리셋 적용 - 선택한 프리셋의 모든 존/라인을 현재 설정으로 로드"""
@@ -1762,6 +1677,7 @@ async def apply_preset(preset_key: str, db: Session = Depends(data_db)):
         
         # 4. 분리 함수 사용: 존/라인 생성 로직 통합
         zones_created, lines_created = _create_or_update_zones_and_lines(db, zones_to_apply)
+        sensors_created = sum(z.sensors for z in zones_to_apply)
         
         db.commit()
         
@@ -1775,6 +1691,9 @@ async def apply_preset(preset_key: str, db: Session = Depends(data_db)):
             "preset_key": preset_key,
             "preset_name": preset.preset_name,
             "zones_loaded": len(zones_to_apply),
+            "zones_created": zones_created,
+            "lines_created": lines_created,
+            "sensors_created": sensors_created,
             "message": f"프리셋 '{preset.preset_name}'이 적용되었습니다"
         }
         

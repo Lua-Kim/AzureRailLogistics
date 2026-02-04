@@ -112,7 +112,10 @@ const LineContainer = styled.div`
   padding: 12px 16px;
   margin-bottom: 12px;
   position: relative;
-  height: 60px;
+  min-height: 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 
   &:last-child {
     margin-bottom: 0;
@@ -123,9 +126,6 @@ const LineName = styled.div`
   font-size: 11px;
   font-weight: 700;
   color: ${props => props.theme.colors.text.muted};
-  position: absolute;
-  top: 2px;
-  left: 8px;
   z-index: 2;
 `;
 
@@ -134,7 +134,7 @@ const LineTrack = styled.div`
   height: 30px;
   background: linear-gradient(to right, #f3f4f6, #e5e7eb, #f3f4f6);
   border-radius: 4px;
-  margin-top: 20px;
+  margin-top: 0;
   overflow: hidden;
   border: 1px solid ${props => props.theme.colors.border};
 `;

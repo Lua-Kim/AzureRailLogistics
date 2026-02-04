@@ -3,9 +3,19 @@ import os
 import asyncio
 import threading
 import time
+import logging
 from typing import List
 from datetime import datetime
 from azure.eventhub.aio import EventHubConsumerClient
+
+# Configure logging for EventHub SDK
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("eventhub_consumer")
+logger.setLevel(logging.DEBUG)
+
+# Set EventHub SDK logging  
+# logging.getLogger("azure.eventhub").setLevel(logging.DEBUG)
+# logging.getLogger("azure.eventhub._pyamqp").setLevel(logging.DEBUG)
 
 class SensorEventConsumer:
     """IoT Hub Event Hub 호환 엔드포인트에서 센서 이벤트를 수신하는 Consumer"""
@@ -33,29 +43,33 @@ class SensorEventConsumer:
         
         # ====== 배치 저장용 ======
         self.event_buffer = []      # 이벤트 버퍼
-        self.buffer_size = 10       # 배치 크기 (테스트용: 10개)
+        self.buffer_size = 20       # 배치 크기 (20개로 증가)
         self.buffer_lock = threading.Lock()
         self.flush_thread = None    # 주기적 플러시 스레드
-        self.buffer_flush_interval = 1  # 1초마다 플러시 (테스트용)
+        self.buffer_flush_interval = 2  # 2초마다 플러시
+        self.db_semaphore = threading.Semaphore(5)  # DB 접근 동시성 제한 (최대 5개 스레드)
         
     def start(self):
-        """Consumer 시작"""
+        """Start Consumer"""
         if self.is_running:
+            print("[EventHubConsumer] Already running, skipping start")
             return
             
         self.is_running = True
-        print(f"Event Hub Consumer 시작: Consumer Group={self.consumer_group}")
+        print(f"[EventHubConsumer] Starting with Consumer Group={self.consumer_group}")
         
-        # 배치 플러시 스레드 시작
+        # Start batch flush thread
         self.flush_thread = threading.Thread(
             target=self._flush_buffer_periodically,
             daemon=True
         )
         self.flush_thread.start()
+        print("[EventHubConsumer] Batch flush thread started")
         
-        # 새 이벤트 루프에서 실행
+        # Run in new event loop
         self.thread = threading.Thread(target=self._run_async_loop, daemon=True)
         self.thread.start()
+        print("[EventHubConsumer] Async consumer thread started")
         
     def _run_async_loop(self):
         """비동기 이벤트 루프 실행"""
@@ -64,39 +78,52 @@ class SensorEventConsumer:
         self.loop.run_until_complete(self._consume_loop())
         
     async def _consume_loop(self):
-        """메시지 수신 루프"""
+        """Message reception loop"""
         try:
             self.client = EventHubConsumerClient.from_connection_string(
                 self.connection_str,
                 consumer_group=self.consumer_group,
             )
-            print("[EventHubConsumer] EventHub 연결 시도...")
+            print("[EventHubConsumer] Attempting EventHub connection...")
+            print(f"[EventHubConsumer] Connection String: {self.connection_str[:80]}...")
+            print(f"[EventHubConsumer] Consumer Group: {self.consumer_group}")
             
             async with self.client:
-                print("[EventHubConsumer] ✅ EventHub 연결 성공, 메시지 대기 중...")
+                # Get event hub properties
+                properties = await self.client.get_eventhub_properties()
+                print(f"[EventHubConsumer] SUCCESS: Connected to EventHub")
+                print(f"[EventHubConsumer] Eventhub: {properties['eventhub_name']}, Partitions: {len(properties['partition_ids'])}")
+                
+                # Standard receive from all partitions
+                print(f"[EventHubConsumer] Listening for messages...")
                 await self.client.receive(
                     on_event=self._on_event,
-                    starting_position="-1",  # 최신 메시지부터
+                    starting_position="-1",  # Receive from latest messages
                 )
+
         except Exception as e:
-            print(f"[EventHubConsumer] ❌ 수신 루프 오류: {type(e).__name__}: {e}")
+            print(f"[EventHubConsumer] CRITICAL ERROR in receive loop: {type(e).__name__}: {e}")
             import traceback
             traceback.print_exc()
     
     async def _on_event(self, partition_context, event):
-        """이벤트 수신 콜백 - 버퍼에 추가 및 바스켓 위치 업데이트"""
+        """Event reception callback - add to buffer and update basket location"""
         if not self.is_running:
             return
         
         try:
-            # 이벤트 데이터 파싱
+            # Parse event data
             event_data = json.loads(event.body_as_str())
             
-            # 디버그 로그
+            # Only log when signal=True (detected)
             zone_id = event_data.get('zone_id', 'N/A')
             signal = event_data.get('signal', False)
             speed = event_data.get('speed', 0)
-            print(f"[EventHubConsumer] 이벤트 수신: zone_id={zone_id}, signal={signal}, speed={speed}")
+            
+            if signal:
+                sensor_id = event_data.get('sensor_id', 'N/A')
+                basket_id = event_data.get('basket_id', 'N/A')
+                print(f"[EventHubConsumer] ✅ SIGNAL DETECTED: zone_id={zone_id}, sensor_id={sensor_id}, basket_id={basket_id}, speed={speed}")
             
             # 바스켓 위치 업데이트 (센서 신호가 감지되었을 때)
             if self.basket_pool and event_data.get("signal"):
@@ -119,11 +146,11 @@ class SensorEventConsumer:
             await partition_context.update_checkpoint(event)
             
         except Exception as e:
-            print(f"[EventHubConsumer] 이벤트 처리 오류: {type(e).__name__}: {e}")
+            print(f"[EventHubConsumer] Event processing error: {type(e).__name__}: {e}")
     
     def _flush_buffer_periodically(self):
-        """주기적으로 버퍼 플러시 (3초마다)"""
-        print("[EventHubConsumer] 배치 플러시 스레드 시작")
+        """Periodically flush buffer"""
+        print("[EventHubConsumer] Batch flush thread started")
         while self.is_running:
             time.sleep(self.buffer_flush_interval)
             with self.buffer_lock:
@@ -140,30 +167,51 @@ class SensorEventConsumer:
         self.event_buffer.clear()
         
         thread = threading.Thread(
-            target=self._save_batch_to_db,
+            target=self._save_batch_to_db_with_lock,
             args=(buffer_copy,),
             daemon=True
         )
         thread.start()
     
+    def _save_batch_to_db_with_lock(self, events):
+        """세마포어로 DB 접근을 제한하는 래퍼"""
+        with self.db_semaphore:
+            self._save_batch_to_db(events)
+    
     def _save_batch_to_db(self, events):
-        """센서 이벤트를 DB에 저장 (별도 스레드에서 실행)"""
-        print(f"\n[_save_batch_to_db] 함수 호출됨 - {len(events)}개 이벤트 저장 준비")
-        
+        """Save sensor events to DB (runs in separate thread)"""
         try:
             from database import SessionLocal
             from models import SensorEvent
+            from sqlalchemy.exc import InvalidRequestError, OperationalError
+            import traceback
             
-            # Azure PostgreSQL 세션 생성
-            db = SessionLocal()
+            # Azure PostgreSQL 세션 생성 (재시도 로직)
+            max_retries = 3
+            db = None
+            for retry_count in range(max_retries):
+                try:
+                    db = SessionLocal()
+                    break
+                except (InvalidRequestError, OperationalError) as e:
+                    if retry_count < max_retries - 1:
+                        print(f"[_save_batch_to_db] DB 연결 재시도 {retry_count + 1}/{max_retries}: {e}")
+                        traceback.print_exc()
+                        time.sleep(0.5)
+                    else:
+                        print(f"[_save_batch_to_db] ❌ DB 연결 실패 (최대 재시도 횟수 초과): {e}")
+                        traceback.print_exc()
+                        return
+            
+            if db is None:
+                print(f"[_save_batch_to_db] ❌ DB 세션을 생성할 수 없습니다")
+                return
             
             try:
                 sensor_events = []
-                print(f"[_save_batch_to_db] 이벤트 변환 시작...")
+                signal_true_count = 0
                 
-                for i, event_data in enumerate(events):
-                    print(f"  [{i+1}/{len(events)}] timestamp={event_data.get('timestamp')}, zone_id={event_data.get('zone_id')}, basket_id={event_data.get('basket_id')}, sensor_id={event_data.get('sensor_id')}, signal={event_data.get('signal')}, speed={event_data.get('speed')}")
-                    
+                for event_data in events:
                     sensor_kwargs = {
                         "timestamp": datetime.fromisoformat(event_data["timestamp"]),
                         "zone_id": event_data.get("zone_id", ""),
@@ -173,6 +221,11 @@ class SensorEventConsumer:
                         "speed": event_data.get("speed", 0.0),
                     }
 
+                    # signal=True일 때만 로깅
+                    if event_data.get("signal"):
+                        signal_true_count += 1
+                        print(f"[DB] Saving signal=True: zone_id={event_data.get('zone_id')}, sensor_id={event_data.get('sensor_id')}, basket_id={event_data.get('basket_id')}")
+
                     # 구버전 모델 호환 (컬럼 존재할 때만 추가)
                     if hasattr(SensorEvent, "position_x"):
                         sensor_kwargs["position_x"] = event_data.get("position_x")
@@ -180,25 +233,11 @@ class SensorEventConsumer:
                     sensor_event = SensorEvent(**sensor_kwargs)
                     sensor_events.append(sensor_event)
                 
-                print(f"[_save_batch_to_db] {len(sensor_events)}개 SensorEvent 객체 생성 완료")
-                print(f"[_save_batch_to_db] {len(sensor_events)}개 SensorEvent 객체 생성 완료")
-                
-                print(f"[_save_batch_to_db] DB add_all 시작...")
                 db.add_all(sensor_events)
-                print(f"[_save_batch_to_db] DB add_all 완료, commit 시작...")
                 db.commit()
-                print(f"✅ [{datetime.now().strftime('%H:%M:%S')}] {len(sensor_events)}개 이벤트 DB 저장 완료")
-
-                # 저장 직후 실제 DB에 데이터가 있는지 테스트
-                try:
-                    from sqlalchemy import text
-                    count = db.execute(text('SELECT COUNT(*) FROM sensor_events')).scalar()
-                    print(f"[TEST] sensor_events 테이블 row 수: {count}")
-                    last = db.execute(text('SELECT id, created_at FROM sensor_events ORDER BY id DESC LIMIT 1')).fetchone()
-                    if last:
-                        print(f"[TEST] 가장 최근 row: id={last[0]}, created_at={last[1]}")
-                except Exception as test_e:
-                    print(f"[TEST] sensor_events 직접 조회 실패: {test_e}")
+                # signal=True만 저장된 경우 로깅
+                if signal_true_count > 0:
+                    print(f"[DB] ✅ Batch saved: {signal_true_count} signal=True events + {len(sensor_events) - signal_true_count} signal=False events (Total: {len(sensor_events)})")
                 
             except Exception as e:
                 db.rollback()

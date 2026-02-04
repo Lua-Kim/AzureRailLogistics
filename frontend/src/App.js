@@ -1,9 +1,9 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
 import styled, { ThemeProvider } from 'styled-components';
-import { Truck, Box, Activity, Sun, Moon, Laptop, Home, Play, Pause } from 'lucide-react';
-import axios from 'axios';
+import GlobalStyle from './GlobalStyle';
+import { Truck, Box, Activity, Sun, Moon, Laptop, Home } from 'lucide-react';
 import LogisticsRailSettingPage from './LogisticsRailSettingPage';
 import BasketVisualizationPage from './BasketVisualizationPage';
 import VisualizationDebugPage from './VisualizationDebugPage';
@@ -12,6 +12,7 @@ import VisualizationDebugPage from './VisualizationDebugPage';
 const Container = styled.div`
   display: flex;
   height: 100vh;
+  max-height: 100vh;
   background-color: ${props => props.theme.colors.background};
   color: ${props => props.theme.colors.text.main};
   transition: background-color 0.3s ease;
@@ -32,41 +33,8 @@ const Sidebar = styled.div`
 const MainContent = styled.div`
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   position: relative;
-`;
-
-const SimulatorSwitch = styled.button`
-  position: fixed;
-  top: 6px;
-  right: 17px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  background-color: ${props => props.$isRunning 
-    ? 'rgba(16, 185, 129, 0.1)' 
-    : 'rgba(239, 68, 68, 0.1)'};
-  color: ${props => props.$isRunning ? '#059669' : '#dc2626'};
-  border: none;
-  border-radius: 0;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  z-index: 1000;
-  box-shadow: none;
-
-  &:hover {
-    background-color: ${props => props.$isRunning 
-      ? 'rgba(16, 185, 129, 0.2)' 
-      : 'rgba(239, 68, 68, 0.2)'};
-    transform: scale(1.05);
-  }
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
 `;
 
 const StyledNavLink = styled(NavLink)`
@@ -108,12 +76,14 @@ const ThemeToggleButton = styled.button`
 
 const lightTheme = {
   colors: { background: '#f8f9fa', surface: '#ffffff', surfaceHighlight: '#f1f3f5', border: '#e9ecef', primary: '#3b82f6', text: { main: '#212529', sub: '#868e96', muted: '#adb5bd' }, status: { success: '#10b981', warning: '#f59e0b', danger: '#ef4444' } },
-  borderRadius: '12px'
+  borderRadius: '12px',
+  fonts: { main: "'Pretendard', 'Noto Sans KR', 'Segoe UI', Arial, sans-serif" }
 };
 
 const darkTheme = {
   colors: { background: '#121212', surface: '#1e1e1e', surfaceHighlight: '#2c2c2c', border: '#333333', primary: '#3b82f6', text: { main: '#e0e0e0', sub: '#a0a0a0', muted: '#606060' }, status: { success: '#10b981', warning: '#f59e0b', danger: '#ef4444' } },
-  borderRadius: '12px'
+  borderRadius: '12px',
+  fonts: { main: "'Pretendard', 'Noto Sans KR', 'Segoe UI', Arial, sans-serif" }
 };
 
 // --- [Components] ---
@@ -129,64 +99,7 @@ const Dashboard = () => (
 
 const App = () => {
   const [themeMode, setThemeMode] = useState('dark');
-  const [simulatorRunning, setSimulatorRunning] = useState(true);
   const theme = themeMode === 'light' ? lightTheme : darkTheme;
-  const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-
-  // 초기 로드 시 시뮬레이터 상태 확인
-  useEffect(() => {
-    const checkSimulatorStatus = async () => {
-      console.log('[App] API_BASE_URL:', API_BASE_URL);
-      console.log('[App] 시뮬레이터 상태 확인 시작...');
-      try {
-        const res = await axios.get(`${API_BASE_URL}/simulator/status`);
-        console.log('[App] 시뮬레이터 상태 응답:', res.data);
-        if (res.data) {
-          setSimulatorRunning(res.data.running);
-          console.log('[App] 시뮬레이터 상태 설정:', res.data.running);
-        }
-      } catch (err) {
-        console.error('[App] 시뮬레이터 상태 확인 실패:', err);
-        console.error('[App] 에러 상세:', err.response?.data || err.message);
-      }
-    };
-    checkSimulatorStatus();
-  }, [API_BASE_URL]);
-
-  const handleSimulatorSwitch = async () => {
-    console.log('\n========== 시뮬레이터 버튼 클릭 ==========');
-    console.log('[App] 현재 상태:', simulatorRunning ? '실행중' : '중지');
-    console.log('[App] API_BASE_URL:', API_BASE_URL);
-    
-    try {
-      const endpoint = simulatorRunning ? '/simulator/stop' : '/simulator/start';
-      const fullUrl = `${API_BASE_URL}${endpoint}`;
-      
-      console.log('[App] 요청 보내는 중...');
-      console.log('[App] URL:', fullUrl);
-      console.log('[App] 동작:', simulatorRunning ? '중지 요청' : '시작 요청');
-      
-      const response = await axios.post(fullUrl);
-      
-      console.log('[App] ✅ 응답 성공:', response.data);
-      console.log('[App] 상태 변경:', simulatorRunning, '->', !simulatorRunning);
-      
-      setSimulatorRunning(!simulatorRunning);
-      
-      console.log('[App] ✅ 시뮬레이터 제어 완료');
-      console.log('==========================================\n');
-      
-    } catch (error) {
-      console.error('\n========== 시뮬레이터 제어 실패 ==========');
-      console.error('[App] ❌ 에러 발생:', error);
-      console.error('[App] 에러 메시지:', error.message);
-      console.error('[App] 에러 응답:', error.response?.data);
-      console.error('[App] 에러 상태 코드:', error.response?.status);
-      console.error('==========================================\n');
-      
-      alert(`시뮬레이터 제어 실패: ${error.response?.data?.message || error.message}`);
-    }
-  };
 
   const toggleTheme = () => {
     setThemeMode(prev => prev === 'light' ? 'dark' : 'light');
@@ -206,6 +119,7 @@ const App = () => {
   return (
     <Router>
       <ThemeProvider theme={theme}>
+        <GlobalStyle />
         <Container>
           {/* 사이드바 영역 */}
           <Sidebar>
@@ -232,11 +146,6 @@ const App = () => {
               <Route path="*" element={<div style={{ padding: '24px' }}>페이지를 준비 중입니다.</div>} />
             </Routes>
           </MainContent>
-
-          <SimulatorSwitch $isRunning={simulatorRunning} onClick={handleSimulatorSwitch}>
-            {simulatorRunning ? <Play size={14} /> : <Pause size={14} />}
-            {simulatorRunning ? '실행중' : '중지'}
-          </SimulatorSwitch>
         </Container>
       </ThemeProvider>
     </Router>

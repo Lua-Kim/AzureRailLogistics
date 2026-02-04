@@ -1,10 +1,16 @@
 import os
 import time
+import logging
 from dotenv import load_dotenv
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import OperationalError
+
+# SQLAlchemy 로깅 활성화 (디버깅용)
+logging.basicConfig()
+logging.getLogger('sqlalchemy.pool').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 # .env 파일 로드 (프로젝트 루트에서)
 env_path = Path(__file__).parent.parent / ".env"
@@ -22,12 +28,13 @@ print(f"[DB] Server: {AZ_POSTGRE_DATABASE_URL.split('@')[1].split('/')[0]}")
 
 # Azure PostgreSQL은 SSL 필수
 # 연결 풀 크기 최적화 (Azure PostgreSQL 제한: 기본 100개)
+# EventHub Consumer의 동시 DB 접근을 위해 pool_size를 50으로 증가
 engine = create_engine(
     AZ_POSTGRE_DATABASE_URL, 
     echo=False, 
-    pool_size=5,  # 활성 연결 수
-    max_overflow=10,  # 추가 연결 가능 수
-    pool_recycle=3600,  # 1시간마다 연결 재생성 (Azure 연결 타임아웃 대비)
+    pool_size=50,  # 활성 연결 수 (이벤트 처리용 증가)
+    max_overflow=50,  # 추가 연결 가능 수
+    pool_recycle=1800,  # 30분마다 연결 재생성 (Azure 연결 타임아웃 대비)
     pool_pre_ping=True,  # 사용 전 연결 상태 확인
     connect_args={"sslmode": "require", "connect_timeout": 10}
 )

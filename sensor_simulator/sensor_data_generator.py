@@ -38,11 +38,11 @@ class SensorDataGenerator:
             # 방법 1: 연결 문자열이 있으면 사용
             device_connection_string = os.getenv("IOT_HUB_DEVICE_CONNECTION_STRING")
             if device_connection_string:
-                print("[센서 시뮬레이션] 연결 문자열로 IoT Hub 연결 시도...")
+                print("[Sensor Simulation] Connecting to IoT Hub using connection string...")
                 self.iot_client = IoTHubDeviceClient.create_from_connection_string(device_connection_string)
             else:
-                # 방법 2: Managed Identity 사용
-                print("[센서 시뮬레이션] Managed Identity로 IoT Hub 연결 시도...")
+                # Method 2: Using Managed Identity
+                print("[Sensor Simulation] Connecting to IoT Hub using Managed Identity...")
                 credential = DefaultAzureCredential()
                 iothub_hostname = os.getenv("IOT_HUB_HOSTNAME", "LogisticsIoTHub.azure-devices.net")
                 device_id = os.getenv("IOT_DEVICE_ID", "logistics-sensor-device")
@@ -54,10 +54,10 @@ class SensorDataGenerator:
                 )
             
             self.iot_client.connect()
-            print("[센서 시뮬레이션] ✅ IoT Hub 연결 성공")
+            print("[Sensor Simulation] SUCCESS: IoT Hub connected")
             
         except Exception as e:
-            print(f"[센서 시뮬레이션] ❌ IoT Hub 연결 실패: {type(e).__name__}: {e}")
+            print(f"[Sensor Simulation] FAILED: IoT Hub connection failed: {type(e).__name__}: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -73,11 +73,11 @@ class SensorDataGenerator:
         self.basket_pool = basket_pool
         self.basket_movement = basket_movement
         
-        # basket_pool은 있는데 movement가 없으면 내부적으로 생성 (하위 호환성)
+        # If basket_pool exists but no movement, create internally (backward compatibility)
         if self.basket_pool and not self.basket_movement:
             self._initialize_basket_movement()
         elif self.basket_movement:
-            print("[센서 시뮬레이션] 외부 BasketMovement 인스턴스 연결됨")
+            print("[Sensor Simulation] External BasketMovement instance connected")
     
     def _setup_mqtt_direct_connection(self, device_connection_string):
         """MQTT Direct 연결 (SSL 검증 우회)"""
@@ -115,32 +115,32 @@ class SensorDataGenerator:
         self.mqtt_client.on_connect = self._on_mqtt_connect
         self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
         
-        # 연결
-        print(f"[센서 시뮬레이션] MQTT 연결 중: {hostname}:8883")
+        # Connect
+        print(f"[Sensor Simulation] Connecting to MQTT: {hostname}:8883")
         self.mqtt_client.connect(hostname, 8883, keepalive=60)
         self.mqtt_client.loop_start()
         
-        # 연결 대기
+        # Wait for connection
         import time
-        for _ in range(30):  # 최대 30초 대기
+        for _ in range(30):  # Max 30 second wait
             if hasattr(self, 'mqtt_connected') and self.mqtt_connected:
                 return
             time.sleep(1)
         
-        raise TimeoutError("MQTT 연결 타임아웃")
+        raise TimeoutError("MQTT connection timeout")
     
     def _on_mqtt_connect(self, client, userdata, flags, rc):
-        """MQTT 연결 콜백"""
+        """MQTT connection callback"""
         if rc == 0:
-            print("[센서 시뮬레이션] ✅ MQTT 연결 성공")
+            print("[Sensor Simulation] SUCCESS: MQTT connected")
             self.mqtt_connected = True
         else:
-            print(f"[센서 시뮬레이션] ❌ MQTT 연결 실패 (코드: {rc})")
+            print(f"[Sensor Simulation] FAILED: MQTT connection failed (code: {rc})")
             self.mqtt_connected = False
     
     def _on_mqtt_disconnect(self, client, userdata, rc):
-        """MQTT 연결 해제 콜백"""
-        print(f"[센서 시뮬레이션] MQTT 연결 해제 (코드: {rc})")
+        """MQTT disconnection callback"""
+        print(f"[Sensor Simulation] MQTT disconnected (code: {rc})")
         self.mqtt_connected = False
     
     def _load_zones_from_db(self):
@@ -154,46 +154,76 @@ class SensorDataGenerator:
             for zone in zones_config:
                 self.zones[zone["zone_id"]] = zone
                 total_sensors += zone["sensors"]
-                
-            print(f"[센서 시뮬레이션] DB에서 {len(self.zones)}개 존 설정 로드 완료")
-            print(f"[센서 시뮬레이션] 총 센서: {total_sensors}개")
+            
+            print(f"[Sensor Simulation] Loaded {len(self.zones)} zones from DB")
+            print(f"[Sensor Simulation] Total sensors: {total_sensors}")
             
         except Exception as e:
-            print(f"[센서 시뮬레이션] ❌ DB 로드 실패: {e}")
+            print(f"[Sensor Simulation] FAILED: DB load failed: {e}")
             import traceback
             traceback.print_exc()
-            # DB 연결 실패 시 빈 설정으로 진행하지 않도록 예외 처리
+            # Don't proceed with empty configuration if DB connection fails
             self.zones = {}
+    
+    def _get_baskets_from_backend(self):
+        """백엔드 API에서 현재 바스켓 상태 조회"""
+        try:
+            import requests
+            # Docker 컨테이너 내부에서는 http://logistics-backend-dev:8000 사용
+            # 로컬에서는 http://localhost:8000 사용
+            backend_url = os.getenv("BACKEND_API_URL", "http://logistics-backend-dev:8000")
+            response = requests.get(f"{backend_url}/baskets", timeout=2)
+            if response.status_code == 200:
+                data = response.json()
+                baskets = data.get("baskets", [])
+                # {line_id: [(basket_id, position_m), ...]}
+                result = {}
+                for basket in baskets:
+                    if basket.get("status") in ["moving", "in_transit"]:
+                        line_id = basket.get("line_id")
+                        basket_id = basket.get("basket_id")
+                        position_m = basket.get("position_m", 0)
+                        if line_id:
+                            if line_id not in result:
+                                result[line_id] = []
+                            result[line_id].append((basket_id, position_m))
+                return result
+        except Exception:
+            pass
+        return {}
 
     def _initialize_basket_movement(self):
-        """바스켓 이동 시뮬레이터 초기화"""
+        """Initialize basket movement simulator"""
         try:
-            # zones 정보를 리스트 형태로 변환하여 전달
+            # Convert zones info to list and pass
             zones_list = list(self.zones.values())
             self.basket_movement = BasketMovement(self.basket_pool, zones_list)
-            print("[센서 시뮬레이션] 바스켓 이동 시뮬레이터 준비 완료")
+            print("[Sensor Simulation] BasketMovement simulator initialized")
         except Exception as e:
-            print(f"[센서 시뮬레이션] ⚠️ 바스켓 이동 시뮬레이터 초기화 실패: {e}")
+            print(f"[Sensor Simulation] WARNING: BasketMovement init failed: {e}")
 
     def start(self):
-        """센서 데이터 생성 시작"""
+        """Start sensor data generation"""
+        print("[Sensor Simulation] Starting...")
         if self.is_running:
+            print("[Sensor Simulation] Already running")
             return
 
         self.is_running = True
+        print("[Sensor Simulation] is_running set to True")
 
-        # basket_movement 시작 (내부 생성된 경우에만 제어)
+        # basket_movement start (only control if internally created)
         if self.basket_movement and not self.basket_movement.is_running:
-            # 외부에서 주입된 경우 이미 실행 중일 수 있으므로 체크
+            # Check in case external instance already running
             try:
                 self.basket_movement.start()
             except RuntimeError:
-                pass # 이미 실행 중이면 무시
+                pass # Already running, ignore
 
         self.stream_thread = threading.Thread(target=self._stream_sensor_data)
         self.stream_thread.daemon = True
         self.stream_thread.start()
-        print("[센서 시뮬레이션] 데이터 스트리밍 시작")
+        print("[Sensor Simulation] Data streaming thread started")
 
     def stop(self):
         """센서 데이터 생성 중지"""
@@ -204,12 +234,21 @@ class SensorDataGenerator:
         # basket_movement 중지 (내부 생성된 경우에만)
         if self.basket_movement and hasattr(self.basket_movement, 'stop'):
             self.basket_movement.stop()
-            
-        print("[센서 시뮬레이션] 데이터 스트리밍 중지")
+        print("[Sensor Simulation] Stopping data stream...")
+        self.is_running = False
+        
+        # Wait for thread to finish (with timeout)
+        if self.stream_thread and self.stream_thread.is_alive():
+            self.stream_thread.join(timeout=5)
+            print("[Sensor Simulation] Data streaming stopped")
 
     def _stream_sensor_data(self):
-        """주기적으로 센서 데이터를 생성하여 IoT Hub로 전송"""
-        print("[센서 시뮬레이션] 메시지 스트리밍 스레드 시작됨")
+        """Periodically generate sensor data and send to IoT Hub"""
+        import sys
+        print("[Sensor Simulation] *** STREAM THREAD STARTED ***", flush=True)
+        
+        sys.stdout.flush()
+        
         send_cycle = 0
         while self.is_running:
             start_time = time.time()
@@ -218,39 +257,58 @@ class SensorDataGenerator:
             try:
                 events_sent = 0
                 active_count = 0
+                
+                if not self.zones:
+                    print("[Sensor Simulation] ERROR: No zones available!", flush=True)
+                    sys.stdout.flush()
+                
                 for zone_id in self.zones:
                     events = self.generate_zone_events(zone_id)
+                    # Filter to only signal=True events
+                    events = [e for e in events if e.get("signal")]
+                    # print(f"[Sensor Simulation] Zone {zone_id}: Generated {len(events)} signal events", flush=True)
+                    # sys.stdout.flush()
+                    
                     for event in events:
-                        if event.get("signal"):
-                            active_count += 1
+                        active_count += 1
                         try:
-                            # IoT Hub로 메시지 전송
                             message_json = json.dumps(event)
                             
-                            # IoTHubDeviceClient 사용
+                            # Use IoTHubDeviceClient
                             if hasattr(self, 'iot_client') and self.iot_client:
                                 message = Message(message_json)
                                 message.content_type = "application/json"
                                 message.content_encoding = "utf-8"
                                 self.iot_client.send_message(message)
-                            # MQTT Direct 사용
+                                print(f"[Sensor Simulation] ✅ SIGNAL DETECTED: zone={zone_id}, sensor={event.get('sensor_id')}, basket={event.get('basket_id')}, signal=True", flush=True)
+                                sys.stdout.flush()
+                                events_sent += 1
+                            # MQTT Direct
                             elif hasattr(self, 'mqtt_client') and self.mqtt_client:
                                 topic = f"devices/{self.mqtt_device_id}/messages/events/"
                                 self.mqtt_client.publish(topic, message_json, qos=1)
-                            
-                            events_sent += 1
+                                print(f"[Sensor Simulation] ✅ SIGNAL DETECTED (MQTT): zone={zone_id}, sensor={event.get('sensor_id')}, basket={event.get('basket_id')}", flush=True)
+                                sys.stdout.flush()
+                                events_sent += 1
+                            else:
+                                print("[Sensor Simulation] ⚠️ WARNING: No valid client available for signal=True event!", flush=True)
+                                sys.stdout.flush()
                         except Exception as send_error:
-                            print(f"[센서 시뮬레이션] ❌ 메시지 전송 오류 (zone={zone_id}): {type(send_error).__name__}: {send_error}")
+                            print(f"[Sensor Simulation] ❌ ERROR: Message send failed (zone={zone_id}): {type(send_error).__name__}: {send_error}", flush=True)
+                            sys.stdout.flush()
                 
-                # 주기적으로 로그 출력 (매 5번째 사이클마다)
-                if send_cycle % 5 == 0:
-                    print(f"[센서 시뮬레이션] ✅ 전송 사이클 #{send_cycle}: 총 {events_sent}개 이벤트 (감지됨: {active_count}개)")
-
+                # Print log only every 10 cycles
+                if send_cycle % 10 == 0:
+                    print(f"[Sensor Simulation] Cycle #{send_cycle}: Active signals detected: {active_count}", flush=True)
+                    sys.stdout.flush()
                 
             except Exception as e:
-                print(f"[센서 시뮬레이션] 전송 오류: {e}")
+                print(f"[Sensor Simulation] ❌ CRITICAL ERROR: {type(e).__name__}: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                sys.stdout.flush()
             
-            # 1초 주기 유지를 위한 대기
+            # Wait to maintain 1 second interval
             elapsed = time.time() - start_time
             sleep_time = max(0, 1.0 - elapsed)
             time.sleep(sleep_time)
@@ -286,15 +344,10 @@ class SensorDataGenerator:
         # 매 센서마다 전체 바스켓을 조회하는 비효율(O(N*M))을 제거 -> O(N+M)으로 개선
         baskets_in_zone = {} # {line_id: [(basket_id, pos_meters), ...]}
         
+        # 먼저 basket_movement에서 시도
         if self.basket_movement:
             with self.basket_movement.lock:
-                # 전체 바스켓 중 현재 zone에 있는 것만 필터링
-                # Debug: 바스켓 정보 확인
-                # if len(self.basket_movement.basket_lines) > 0:
-                #     print(f"[Debug] Total baskets: {len(self.basket_movement.basket_lines)}, Checking Zone: {zone_id}")
-                
                 for basket_id, info in self.basket_movement.basket_lines.items():
-                    # zone_id 비교 시 공백 제거 등 안전하게 처리
                     if str(info.get("zone_id")).strip() == str(zone_id).strip():
                         lid = info.get("line_id")
                         pos = self.basket_movement.basket_positions.get(basket_id)
@@ -302,6 +355,18 @@ class SensorDataGenerator:
                             if lid not in baskets_in_zone:
                                 baskets_in_zone[lid] = []
                             baskets_in_zone[lid].append((basket_id, pos))
+        
+        # Also fetch backend baskets to support both local simulation and backend-deployed baskets
+        backend_baskets = self._get_baskets_from_backend()
+        if backend_baskets:
+            # 해당 zone의 라인만 필터링
+            for line_id, basket_list in backend_baskets.items():
+                # line_id가 zone_id로 시작하는지 확인
+                if str(line_id).startswith(str(zone_id)):
+                    if line_id not in baskets_in_zone:
+                        baskets_in_zone[line_id] = []
+                    # Add backend baskets to the list
+                    baskets_in_zone[line_id].extend(basket_list)
 
         # 구역 내 모든 라인의 센서 상태 확인
         for line in lines:
@@ -316,6 +381,7 @@ class SensorDataGenerator:
             
             # 해당 라인에 있는 바스켓들의 위치 목록
             line_basket_positions = baskets_in_zone.get(line_id, [])
+            
             DETECTION_RANGE = 0.5
 
             for i in range(sensors_per_line):

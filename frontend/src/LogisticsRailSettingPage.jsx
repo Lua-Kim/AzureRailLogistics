@@ -496,6 +496,7 @@ const initialZones = presets.megaFc;
 
 const LogisticsRailSettingPage = () => {
   const [zones, setZones] = useState([]);
+  const [presetList, setPresetList] = useState([]); // API에서 가져온 프리셋 목록
   const [editingZone, setEditingZone] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({ id: '', name: '', lines: '', length: '', sensors: '' });
@@ -536,6 +537,22 @@ const LogisticsRailSettingPage = () => {
       }
     };
     loadZones();
+  }, []);
+  
+  // 프리셋 목록 로드
+  useEffect(() => {
+    const loadPresets = async () => {
+      try {
+        const response = await apiService.getPresets();
+        if (response && response.presets) {
+          setPresetList(response.presets);
+          console.log('✅ 프리셋 목록 로드:', response.presets);
+        }
+      } catch (error) {
+        console.error('프리셋 목록 로드 실패:', error);
+      }
+    };
+    loadPresets();
   }, []);
   
   // zones 변경 시 DB에 저장
@@ -871,13 +888,15 @@ const LogisticsRailSettingPage = () => {
 
       <PresetContainer>
         <PresetLabel>기능별 프리셋:</PresetLabel>
-        <PresetButton onClick={() => handlePresetClick('mfc')}>소형/도심 MFC</PresetButton>
-        <PresetButton onClick={() => handlePresetClick('tc')}>통과형 센터 (TC)</PresetButton>
-        <PresetButton onClick={() => handlePresetClick('dc')}>광역 배송 센터 (DC)</PresetButton>
-        <PresetButton onClick={() => handlePresetClick('megaFc')}>메가 풀필먼트 (FC)</PresetButton>
-        <PresetButton onClick={() => handlePresetClick('superFc')}>초대형 풀필먼트 (Super FC)</PresetButton>
-        <PresetButton onClick={() => handlePresetClick('intlHub')}>국제 물류 허브</PresetButton>
-        <PresetButton onClick={() => handlePresetClick('autoFc')}>자동화 물류센터</PresetButton>
+        {presetList.length > 0 ? (
+          presetList.map((preset) => (
+            <PresetButton key={preset.preset_key} onClick={() => handlePresetClick(preset.preset_key)}>
+              {preset.preset_name}
+            </PresetButton>
+          ))
+        ) : (
+          <span style={{ color: '#999', fontSize: '12px' }}>프리셋을 로드 중입니다...</span>
+        )}
       </PresetContainer>
 
       {error ? (

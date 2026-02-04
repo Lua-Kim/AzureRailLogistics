@@ -33,21 +33,21 @@ def initialize_simulator():
         print("[API Server] 시뮬레이터 초기화 중...")
         basket_pool = BasketPool(pool_size=100)
         generator = SensorDataGenerator(basket_pool=basket_pool)
-        print("[API Server] 시뮬레이터 준비 완료")
+        print("[API Server] Simulator initialized")
 
 @app.on_event("startup")
 async def startup_event():
-    """서버 시작 시 시뮬레이터 초기화 (자동 시작 없음)"""
+    """Initialize simulator on server startup"""
     initialize_simulator()
-    # 자동 시작 제거 - 사용자가 프론트엔드에서 수동으로 시작해야 함
-    print("[API Server] 시뮬레이터 초기화 완료 (자동 시작 안함)")
+    # Auto-start removed - user must start manually from frontend
+    print("[API Server] Simulator initialization complete (auto-start disabled)")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """서버 종료 시 시뮬레이터 중지"""
+    """Stop simulator on server shutdown"""
     if generator and generator.is_running:
         generator.stop()
-        print("[API Server] 시뮬레이터 중지 완료")
+        print("[API Server] Simulator stopped")
 
 @app.get("/")
 async def root():
@@ -115,10 +115,11 @@ async def stop_simulator():
         }
     
     try:
-        generator.stop()
+        # 정지 작업은 백그라운드에서 처리해 응답 지연을 줄임
+        threading.Thread(target=generator.stop, daemon=True).start()
         return {
             "status": "success",
-            "message": "시뮬레이터 정지 완료",
+            "message": "시뮬레이터 정지 요청 완료",
             "running": False
         }
     except Exception as e:

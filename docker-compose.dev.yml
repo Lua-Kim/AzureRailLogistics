@@ -5,33 +5,28 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: azcr01.azurecr.io/logistics-backend:latest
-    container_name: logistics-backend
+    container_name: logistics-backend-dev
     ports:
       - "8000:8000"
     environment:
       - IOT_HUB_DEVICE_CONNECTION_STRING=${IOT_HUB_DEVICE_CONNECTION_STRING}
       - EVENTHUB_CONNECTION_STRING=${EVENTHUB_CONNECTION_STRING}
-      - EVENTHUB_CONSUMER_GROUP=${EVENTHUB_CONSUMER_GROUP:-$Default}
+      - EVENTHUB_CONSUMER_GROUP=$$Default
       - AZ_POSTGRE_DATABASE_URL=${AZ_POSTGRE_DATABASE_URL}
-      - SIMULATOR_API_BASE=http://simulator:5001
       - BACKEND_PORT=${BACKEND_PORT}
       - BACKEND_HOST=${BACKEND_HOST}
       - CORS_ORIGINS=${CORS_ORIGINS}
     env_file:
-      - .env
+      - .env.dev
     depends_on:
       - simulator
     restart: unless-stopped
 
-
-  
   simulator:
     build:
       context: ./sensor_simulator
       dockerfile: Dockerfile
-    image: azcr01.azurecr.io/logistics-simulator:latest
-    container_name: logistics-simulator
+    container_name: logistics-simulator-dev
     ports:
       - "5001:5001"
     environment:
@@ -39,5 +34,5 @@ services:
       - IOT_HUB_HOSTNAME=aziothub01.azure-devices.net
       - IOT_DEVICE_ID=iotdevice
     env_file:
-      - .env
+      - .env.dev
     restart: unless-stopped
