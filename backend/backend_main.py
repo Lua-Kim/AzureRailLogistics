@@ -1597,7 +1597,13 @@ async def get_all_presets(db: Session = Depends(data_db)):
         # presets 테이블에서 모든 프리셋 조회
         presets = db.query(Preset).all()
         
+        print(f"[DEBUG] /presets 호출됨")
+        print(f"[DEBUG] Preset 테이블 행 개수: {len(presets) if presets else 0}")
+        for p in presets:
+            print(f"[DEBUG]   - {p.preset_key}: {p.preset_name}")
+        
         if not presets:
+            print(f"[DEBUG] Preset이 비어있음, 기본값 반환")
             return {
                 "presets": [],
                 "message": "저장된 프리셋이 없습니다."
