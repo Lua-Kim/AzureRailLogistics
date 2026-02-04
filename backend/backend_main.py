@@ -1,24 +1,25 @@
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, delete
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import Integer
-from typing import Optional
+from typing import Optional, List
 from database import init_data_db, data_db, logis_data_db
-from models import LogisticsZone, LogisticsLine, SensorEvent
+from models import LogisticsZone, LogisticsLine, SensorEvent, Preset, PresetZone
 from schemas import (
     LogisticsZoneCreate, 
     LogisticsZone as LogisticsZoneSchema,
     BasketCreateRequest,
     BasketCreateResponse
 )
-from typing import List
 import sys
 import os
 import threading
 import random
 import asyncio
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime
@@ -112,9 +113,18 @@ MAX_LINE_CAPACITY_PERCENT = 80
 # 같은 라인에서 바스켓 간 최소 간격 (초)
 MIN_BASKET_INTERVAL = 3.0
 
+# 바스켓 간 최소 거리 (미터) - 라인별 용량 계산 기준
+BASKET_SPACING_M = 5.0
+
 # 라인별 용량 정보 (초기화 시 계산, 매번 재계산 방지)
 # 구조: {line_id: {"max": int, "length": float}}
 line_capacity_info = {}
+
+# 바스켓 투입 대기 큐
+deployment_queue = []
+
+# 라인별 마지막 투입 시간 (초)
+line_last_deployment = {}
 
 def initialize_basket_pool(db: Session):
     """
@@ -142,18 +152,18 @@ def initialize_basket_pool(db: Session):
         }
         zones_lines_config.append(zone_config)
     
-    # BasketPool 초기화 (초기 배치 없이 빈 상태로 시작)
-    basket_pool = BasketPool(pool_size=1000)
+    # BasketPool 초기화 (zones_lines_config 전달)
+    basket_pool = BasketPool(pool_size=1000, zones_lines_config=zones_lines_config)
     
     # ============ 라인별 최대 수용량 계산 (초기화 시 1회만) ============
-    # 5m 간격 기준으로 각 라인이 수용할 수 있는 최대 바스켓 수 계산
+    # BASKET_SPACING_M 간격 기준으로 각 라인이 수용할 수 있는 최대 바스켓 수 계산
     line_capacity_info = {}
     for zone in zones:
         zone_lines = zone.zone_lines if zone.zone_lines else []
         for line in zone_lines:
             line_id = line.line_id
             line_length = line.length if hasattr(line, 'length') else 100
-            max_capacity = int(line_length / 5)  # 5m 간격 기준
+            max_capacity = int(line_length / BASKET_SPACING_M)  # BASKET_SPACING_M 간격 기준
             line_capacity_info[line_id] = {
                 "max": max_capacity,
                 "length": line_length
@@ -179,7 +189,12 @@ def initialize_basket_pool(db: Session):
                 num_segments = 5  # 센서가 없으면 기본 5개 구간
             
             # 센서 개수만큼 구간 분할
-            segment_length = line_length / num_segments
+            if num_segments > 0:
+                segment_length = line_length / num_segments
+            else:
+                segment_length = line_length
+                num_segments = 1
+            
             segments = []
             for i in range(num_segments):
                 segments.append({
@@ -223,19 +238,31 @@ async def update_basket_positions_task():
     백그라운드 작업: 구간별 속도를 적용하여 바스켓 위치를 주기적으로 업데이트
     
     동작 원리:
-    1. 100ms마다 moving/in_transit 상태의 모든 바스켓 확인
+    1. 주기적으로 moving/in_transit 상태의 모든 바스켓 확인
     2. 각 바스켓의 현재 위치에 해당하는 구간의 속도 계수 조회
-    3. 실제 속도 = 기본 속도(1m/s) × 속도 계수 × 0.1초
+    3. 실제 속도 = 기본 속도(1m/s) × 속도 계수 × 경과시간(dt)
     4. 새 위치 계산 후 라인 끝 도달 시 'arrived' 상태로 전환
     5. 앞 바스켓 때문에 이동이 멈춘 경우 병목 플래그 설정
     """
-    print("[위치 업데이터] 바스켓 이동 시스템 가동")
+    print("[위치 업데이터] 바스켓 이동 시스템 가동 (Delta Time 적용)")
+    last_time = time.time()
+    
     while True:
         try:
             await asyncio.sleep(0.1)  # 100ms마다 업데이트
+            current_time = time.time()
+            dt = current_time - last_time
+            last_time = current_time
+            
+            # 디버깅 등으로 인해 멈췄다가 실행될 때 순간이동 방지 (최대 0.2초로 보정)
+            if dt > 0.5:
+                dt = 0.1
+                print(f"[위치 업데이터] 과도한 dt 감지 ({current_time - last_time:.2f}s) -> 0.1s로 보정") 
+
             if basket_pool and hasattr(basket_pool, 'base_speed_mps'):
                 baskets = basket_pool.get_all_baskets()
-                for basket_id, basket in baskets.items():
+                # 딕셔너리 순회 중 변경 오류 방지를 위해 list로 변환
+                for basket_id, basket in list(baskets.items()):
                     if basket['status'] in ['moving', 'in_transit']:
                         line_id = basket.get('line_id')
                         position_m = basket.get('position_m', 0)
@@ -246,14 +273,16 @@ async def update_basket_positions_task():
                             speed_multiplier = get_speed_at_position(line_id, position_m)
                             actual_speed_mps = basket_pool.base_speed_mps * speed_multiplier
                             
-                            # 0.1초 동안 이동한 거리 계산
-                            distance_delta = actual_speed_mps * 0.1
+                            # dt 동안 이동한 거리 계산
+                            distance_delta = actual_speed_mps * dt
                             new_position_m = position_m + distance_delta
                             
                             # ========== 추월 방지: 같은 라인의 앞 바스켓과 최소 거리 유지 ==========
                             # 같은 라인의 다른 바스켓 중 위치가 가까운 것 확인
                             min_distance = 2.0  # 바스켓 간 최소 거리 (미터)
                             is_blocked_by_front = False  # 앞 바스켓에 의해 막혔는가?
+                            
+                            # (최적화 가능: 라인별로 바스켓 그룹화)
                             for other_id, other_basket in baskets.items():
                                 if (other_id != basket_id and 
                                     other_basket.get('line_id') == line_id and
@@ -290,6 +319,7 @@ async def update_basket_positions_task():
         except Exception as e:
             print(f"[위치 업데이트] 오류 발생: {e}")
             await asyncio.sleep(1)
+            last_time = time.time()
 
 async def deployment_queue_task():
     """
@@ -304,7 +334,6 @@ async def deployment_queue_task():
     """
     print("[Deployment Queue] 바스켓 투입 시스템 가동")
     global deployment_queue, line_last_deployment
-    import time
     
     while True:
         try:
@@ -328,7 +357,7 @@ async def deployment_queue_task():
                 
                 # 해당 라인의 현재 바스켓 수 체크
                 line_baskets = [b for b in basket_pool.get_all_baskets().values() 
-                               if b.get('line_id') == line_id and b['status'] in ['moving', 'in_transit', 'deploying']]
+                              if b.get('line_id') == line_id and b['status'] in ['moving', 'in_transit', 'deploying']]
                 
                 # 투입 조건 확인
                 can_deploy = False
@@ -768,8 +797,11 @@ async def get_bottlenecks():
     return result
 
 @app.get("/sensors/history")
-async def get_sensor_history(zone_id: str = None, count: int = 100):
+async def get_sensor_history(zone_id: Optional[str] = None, count: int = 100):
     """센서 히스토리 조회 - 원본 센서 데이터 반환 (집계 X)"""
+    if not consumer or not hasattr(consumer, 'latest_events'):
+        return []
+    
     events = consumer.latest_events
     
     # zone_id로 필터링
@@ -974,6 +1006,75 @@ async def create_lines(lines: List[dict], db: Session = Depends(data_db)):
     """라인 저장 (배치)"""
     return logis_data_db.save_lines(db, lines)
 
+def _create_or_update_zones_and_lines(db: Session, zones_list: List[LogisticsZoneCreate]) -> tuple:
+    """
+    존과 라인을 일괄 생성 또는 업데이트 (중복 코드 제거용 분리 함수)
+    
+    Args:
+        db: Database session
+        zones_list: 생성/업데이트할 존 목록
+    
+    Returns:
+        (생성된 존 개수, 생성된 라인 개수)
+    """
+    # 1. 기존 존 ID 목록 조회
+    existing_zones = db.query(LogisticsZone).all()
+    existing_ids = {z.zone_id for z in existing_zones}
+    new_ids = {z.zone_id for z in zones_list}
+    
+    # 2. 삭제 대상 (기존에는 있지만 새 요청에는 없는 존)
+    to_delete = existing_ids - new_ids
+    if to_delete:
+        # 연관된 라인 먼저 삭제 후 존 삭제
+        db.query(LogisticsLine).filter(LogisticsLine.zone_id.in_(to_delete)).delete(synchronize_session=False)
+        db.query(LogisticsZone).filter(LogisticsZone.zone_id.in_(to_delete)).delete(synchronize_session=False)
+
+    zones_created = 0
+    lines_created = 0
+
+    # 3. 생성 및 업데이트
+    for zone_data in zones_list:
+        # 존 조회
+        zone = db.query(LogisticsZone).filter(LogisticsZone.zone_id == zone_data.zone_id).first()
+        
+        if zone:
+            # 업데이트
+            zone.name = zone_data.name
+            zone.lines = zone_data.lines
+            zone.length = zone_data.length
+            zone.sensors = zone_data.sensors
+            # 기존 라인 삭제 (라인 설정이 바뀌었을 수 있으므로 재생성)
+            deleted_count = db.query(LogisticsLine).filter(LogisticsLine.zone_id == zone_data.zone_id).delete(synchronize_session=False)
+            print(f"    - Zone {zone_data.zone_id}: 기존 라인 {deleted_count}개 삭제됨")
+        else:
+            # 생성
+            zone = LogisticsZone(
+                zone_id=zone_data.zone_id,
+                name=zone_data.name,
+                lines=zone_data.lines,
+                length=zone_data.length,
+                sensors=zone_data.sensors
+            )
+            db.add(zone)
+            zones_created += 1
+        
+        # 라인 생성 (001, 002... 형식)
+        sensors_per_line = zone_data.sensors // zone_data.lines if zone_data.lines > 0 else 0
+        new_lines = []
+        for i in range(zone_data.lines):
+            line_id = f"{zone_data.zone_id}-{i+1:03d}"
+            new_lines.append(LogisticsLine(
+                zone_id=zone_data.zone_id,
+                line_id=line_id,
+                length=zone_data.length,
+                sensors=sensors_per_line
+            ))
+        db.add_all(new_lines)
+        lines_created += len(new_lines)
+        print(f"    - Zone {zone_data.zone_id}: 새 라인 {len(new_lines)}개 생성됨")
+    
+    return zones_created, lines_created
+
 @app.get("/zones/config", response_model=List[LogisticsZoneSchema])
 async def get_zones_config(db: Session = Depends(data_db)):
     """현재 zones 설정 조회"""
@@ -1010,57 +1111,9 @@ async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = D
         print(f"    [{i+1}] {zone.zone_id} ({zone.name}): Lines={zone.lines}, Sensors={zone.sensors}")
         
     try:
-        # 1. 기존 존 ID 목록 조회
-        existing_zones = db.query(LogisticsZone).all()
-        existing_ids = {z.zone_id for z in existing_zones}
-        new_ids = {z.zone_id for z in zones_list}
+        # 분리 함수 사용: 존/라인 생성 로직 통합
+        zones_created, lines_created = _create_or_update_zones_and_lines(db, zones_list)
         
-        # 2. 삭제 대상 (기존에는 있지만 새 요청에는 없는 존)
-        to_delete = existing_ids - new_ids
-        if to_delete:
-            # 연관된 라인 먼저 삭제 후 존 삭제
-            db.query(LogisticsLine).filter(LogisticsLine.zone_id.in_(to_delete)).delete(synchronize_session=False)
-            db.query(LogisticsZone).filter(LogisticsZone.zone_id.in_(to_delete)).delete(synchronize_session=False)
-
-        # 3. 생성 및 업데이트
-        for zone_data in zones_list:
-            # 존 조회
-            zone = db.query(LogisticsZone).filter(LogisticsZone.zone_id == zone_data.zone_id).first()
-            
-            if zone:
-                # 업데이트
-                zone.name = zone_data.name
-                zone.lines = zone_data.lines
-                zone.length = zone_data.length
-                zone.sensors = zone_data.sensors
-                # 기존 라인 삭제 (라인 설정이 바뀌었을 수 있으므로 재생성)
-                deleted_count = db.query(LogisticsLine).filter(LogisticsLine.zone_id == zone_data.zone_id).delete(synchronize_session=False)
-                print(f"    - Zone {zone_data.zone_id}: 기존 라인 {deleted_count}개 삭제됨")
-            else:
-                # 생성
-                zone = LogisticsZone(
-                    zone_id=zone_data.zone_id,
-                    name=zone_data.name,
-                    lines=zone_data.lines,
-                    length=zone_data.length,
-                    sensors=zone_data.sensors
-                )
-                db.add(zone)
-            
-            # 라인 생성 (001, 002... 형식)
-            sensors_per_line = zone_data.sensors // zone_data.lines if zone_data.lines > 0 else 0
-            new_lines = []
-            for i in range(zone_data.lines):
-                line_id = f"{zone_data.zone_id}-{i+1:03d}"
-                new_lines.append(LogisticsLine(
-                    zone_id=zone_data.zone_id,
-                    line_id=line_id,
-                    length=zone_data.length,
-                    sensors=sensors_per_line
-                ))
-            db.add_all(new_lines)
-            print(f"    - Zone {zone_data.zone_id}: 새 라인 {len(new_lines)}개 생성됨")
-            
         db.commit()
         print("  ✅ 로컬 PostgreSQL 저장 완료")
         
@@ -1076,7 +1129,17 @@ async def set_zones_batch(zones_list: List[LogisticsZoneCreate], db: Session = D
     except Exception as e:
         db.rollback()
         print(f"  - 배치 저장 실패: {e}")
-        raise e
+        import traceback
+        traceback.print_exc()
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"존/라인 저장 실패: {str(e)}"
+            }
+        )
+
 
 
 def _sync_zones_to_sqlite_and_azure(zones_list: List[LogisticsZoneCreate]):
@@ -1097,7 +1160,7 @@ def _sync_zones_to_sqlite_and_azure(zones_list: List[LogisticsZoneCreate]):
 
 def _save_zones_to_sqlite(zones_list: List[LogisticsZoneCreate]):
     """로컬 SQLite에 zones 저장"""
-    from sqlalchemy import Column, String, Integer, Text, TIMESTAMP, ForeignKey, Index, delete
+    from sqlalchemy import Column, String, Integer, Text, TIMESTAMP, ForeignKey, Index
     from sqlalchemy.orm import declarative_base
     from sqlalchemy.sql import func
     
@@ -1167,8 +1230,9 @@ def _save_zones_to_azure(zones_list: List[LogisticsZoneCreate]):
     
     azure_session = AzureSession()
     try:
-        # 기존 데이터 삭제
-        azure_session.execute("DELETE FROM logistics_lines")
+        # 기존 데이터 삭제 (안전한 방식)
+        azure_session.execute(delete(LogisticsLine))
+        azure_session.execute(delete(LogisticsZone))
         azure_session.commit()
         
         # 새 데이터 삽입
@@ -1204,11 +1268,11 @@ def _save_zones_to_azure(zones_list: List[LogisticsZoneCreate]):
 
 @app.post("/api/baskets/create")
 async def create_baskets(
-    request_data: "BasketCreateRequest",
+    request_data: BasketCreateRequest,
     db: Session = Depends(data_db)
 ):
     """
-    바스켓 생성 및 라인에 할당
+    바스켓 생성 및 라인에 할당 (수정됨: 중복 코드 제거 완료)
     
     Args:
         zone_id: 구역 ID (예: IB-01)
@@ -1357,70 +1421,6 @@ async def create_baskets(
         "warnings": warnings,
         "message": f"{len(queued_baskets)}개 바스켓이 투입 대기열에 추가되었습니다. 순차적으로 투입됩니다."
     }
-    line_capacities = {}
-    for line_id in target_lines:
-        line = db.query(LogisticsLine).filter(LogisticsLine.line_id == line_id).first()
-        if line:
-            line_length = line.length if hasattr(line, 'length') else 100
-            max_capacity = int(line_length / 5)  # 5m 간격 기준 최대 용량
-            current_baskets = [b for b in basket_pool.get_all_baskets().values() 
-                             if b.get('line_id') == line_id and b['status'] in ['moving', 'in_transit', 'deploying']]
-            current_count = len(current_baskets)
-            capacity_percent = (current_count / max_capacity * 100) if max_capacity > 0 else 0
-            
-            line_capacities[line_id] = {
-                "current": current_count,
-                "max": max_capacity,
-                "percent": capacity_percent
-            }
-            
-            if capacity_percent >= MAX_LINE_CAPACITY_PERCENT:
-                warnings.append(f"⚠️ {line_id} 라인 혼잡 ({capacity_percent:.0f}% 사용 중)")
-    
-    # 투입 큐에 추가 (즉시 투입하지 않고 큐에 넣음)
-    queued_baskets = []
-    destination = request_data.destination or request_data.zone_id
-    
-    for i in range(request_data.count):
-        if i >= len(available_baskets):
-            break
-            
-        basket = available_baskets[i]
-        basket_id = basket["basket_id"]
-        
-        # 라인 선택: 용량이 적은 라인 우선 (로드 밸런싱)
-        if request_data.line_id:
-            selected_line_id = request_data.line_id
-        else:
-            # 용량 퍼센트가 낮은 라인부터 선택
-            sorted_lines = sorted(target_lines, key=lambda lid: line_capacities.get(lid, {}).get("percent", 0))
-            selected_line_id = sorted_lines[i % len(sorted_lines)]
-        
-        # 투입 큐에 추가 (상태를 deploying으로 변경)
-        basket_pool.update_basket_status(basket_id, 'deploying')
-        deployment_queue.append({
-            "basket_id": basket_id,
-            "zone_id": request_data.zone_id,
-            "line_id": selected_line_id,
-            "destination": destination
-        })
-        
-        queued_baskets.append({
-            "basket_id": basket_id,
-            "line_id": selected_line_id,
-            "status": "deploying"
-        })
-        print(f"[투입 큐 추가] {basket_id} → {selected_line_id} (대기열: {len(deployment_queue)})")
-    
-    return {
-        "success": True,
-        "queued_count": len(queued_baskets),
-        "baskets": queued_baskets,
-        "queue_length": len(deployment_queue),
-        "line_capacities": line_capacities,
-        "warnings": warnings,
-        "message": f"{len(queued_baskets)}개 바스켓이 투입 대기열에 추가되었습니다. 순차적으로 투입됩니다."
-    }
 
 @app.get("/baskets")
 async def get_all_baskets(db: Session = Depends(data_db)):
@@ -1515,11 +1515,14 @@ async def start_simulator():
         print(f"[Simulator Control] ❌ 시작 실패: {e}")
         import traceback
         traceback.print_exc()
-        return {
-            "status": "error",
-            "message": f"시뮬레이터 시작 실패: {str(e)}",
-            "running": False
-        }
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"시뮬레이터 시작 실패: {str(e)}",
+                "running": False
+            }
+        )
 
 @app.post("/simulator/stop")
 async def stop_simulator():
@@ -1540,11 +1543,14 @@ async def stop_simulator():
         print(f"[Simulator Control] ❌ 중지 실패: {e}")
         import traceback
         traceback.print_exc()
-        return {
-            "status": "error",
-            "message": f"시뮬레이터 중지 실패: {str(e)}",
-            "running": True
-        }
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"시뮬레이터 중지 실패: {str(e)}",
+                "running": True
+            }
+        )
 
 @app.post("/simulator/reset")
 async def reset_simulator(db: Session = Depends(data_db)):
@@ -1571,42 +1577,68 @@ async def reset_simulator(db: Session = Depends(data_db)):
         }
     except Exception as e:
         print(f"[Simulator Reset] 초기화 실패: {e}")
-        return {
-            "status": "error",
-            "message": f"시뮬레이터 초기화 실패: {str(e)}"
-        }
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"시뮬레이터 초기화 실패: {str(e)}"
+            }
+        )
 
 # ============ 프리셋 API (Azure PostgreSQL에서 읽기) ============
 
 @app.get("/presets")
 async def get_all_presets(db: Session = Depends(data_db)):
-    """현재 적용된 프리셋 조회"""
+    """사용 가능한 모든 프리셋 목록 조회"""
     try:
-        preset_info = logis_data_db.get_current_preset(db)
+        from sqlalchemy import select
+        # presets 테이블에서 모든 프리셋 조회
+        presets = db.query(Preset).all()
         
-        if not preset_info:
+        if not presets:
             return {
                 "presets": [],
-                "message": "현재 적용된 프리셋이 없습니다. 프리셋을 적용해주세요."
+                "message": "저장된 프리셋이 없습니다."
             }
         
-        return {
-            "presets": [{
-                "preset_key": "current",
-                "preset_name": f"현재 설정 ({preset_info['total_zones']}개 존)",
-                "description": "Azure PostgreSQL에 저장된 현재 시설 구성",
-                "total_zones": preset_info['total_zones'],
-                "total_lines": preset_info['total_lines'],
-                "total_length_m": preset_info['total_length_m'],
-                "total_sensors": preset_info['total_sensors']
-            }]
-        }
+        result = []
+        for preset in presets:
+            zones = db.query(PresetZone).filter(PresetZone.preset_key == preset.preset_key).all()
+            total_lines = sum(z.lines for z in zones)
+            total_sensors = sum(z.sensors for z in zones)
+            
+            result.append({
+                "preset_key": preset.preset_key,
+                "preset_name": preset.preset_name,
+                "zones_count": len(zones),
+                "total_lines": total_lines,
+                "total_sensors": total_sensors,
+                "zones": [
+                    {
+                        "id": z.zone_id,
+                        "name": z.zone_name,
+                        "lines": z.lines,
+                        "length": z.length,
+                        "sensors": z.sensors
+                    } for z in zones
+                ]
+            })
+        
+        return {"presets": result}
+        
     except Exception as e:
         print(f"❌ 프리셋 조회 실패: {e}")
-        return {
-            "status": "error",
-            "message": f"프리셋 조회 실패: {str(e)}"
-        }, 500
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"프리셋 조회 실패: {str(e)}"
+            }
+        )
 
 @app.get("/presets/current")
 async def get_current_preset(db: Session = Depends(data_db)):
@@ -1615,10 +1647,13 @@ async def get_current_preset(db: Session = Depends(data_db)):
         preset_info = logis_data_db.get_current_preset(db)
         
         if not preset_info:
-            return {
-                "error": "현재 적용된 프리셋이 없습니다",
-                "zones": []
-            }, 404
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "현재 적용된 프리셋이 없습니다",
+                    "zones": []
+                }
+            )
         
         return {
             "preset_key": "current",
@@ -1632,10 +1667,15 @@ async def get_current_preset(db: Session = Depends(data_db)):
         }
     except Exception as e:
         print(f"❌ 프리셋 상세 조회 실패: {e}")
-        return {
-            "status": "error",
-            "message": f"프리셋 상세 조회 실패: {str(e)}"
-        }, 500
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"프리셋 상세 조회 실패: {str(e)}"
+            }
+        )
 
 @app.delete("/presets/current")
 async def clear_preset(db: Session = Depends(data_db)):
@@ -1661,10 +1701,86 @@ async def clear_preset(db: Session = Depends(data_db)):
     except Exception as e:
         db.rollback()
         print(f"❌ 프리셋 초기화 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"프리셋 초기화 실패: {str(e)}"
+            }
+        )
+
+@app.post("/presets/{preset_key}/apply")
+async def apply_preset(preset_key: str, db: Session = Depends(data_db)):
+    """프리셋 적용 - 선택한 프리셋의 모든 존/라인을 현재 설정으로 로드"""
+    global basket_pool
+    
+    try:
+        # 1. 프리셋 조회
+        preset = db.query(Preset).filter(Preset.preset_key == preset_key).first()
+        if not preset:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "message": f"프리셋 '{preset_key}'을 찾을 수 없습니다"
+                }
+            )
+        
+        # 2. 프리셋 존 조회
+        preset_zones = db.query(PresetZone).filter(PresetZone.preset_key == preset_key).all()
+        if not preset_zones:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "message": f"프리셋 '{preset_key}'에 존이 없습니다"
+                }
+            )
+        
+        # 3. PresetZone을 LogisticsZoneCreate로 변환
+        zones_to_apply = [
+            LogisticsZoneCreate(
+                zone_id=pz.zone_id,
+                name=pz.zone_name,
+                lines=pz.lines,
+                length=pz.length,
+                sensors=pz.sensors
+            )
+            for pz in preset_zones
+        ]
+        
+        # 4. 분리 함수 사용: 존/라인 생성 로직 통합
+        zones_created, lines_created = _create_or_update_zones_and_lines(db, zones_to_apply)
+        
+        db.commit()
+        
+        # 5. BasketPool 재초기화
+        initialize_basket_pool(db)
+        
+        print(f"✅ 프리셋 '{preset_key}' 적용 완료: {len(zones_to_apply)}개 존 로드됨")
+        
         return {
-            "status": "error",
-            "message": f"프리셋 초기화 실패: {str(e)}"
-        }, 500
+            "status": "success",
+            "preset_key": preset_key,
+            "preset_name": preset.preset_name,
+            "zones_loaded": len(zones_to_apply),
+            "message": f"프리셋 '{preset.preset_name}'이 적용되었습니다"
+        }
+        
+    except Exception as e:
+        db.rollback()
+        print(f"❌ 프리셋 적용 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"프리셋 적용 실패: {str(e)}"
+            }
+        )
 
 # ============ Mock 센서 데이터 (테스트용) ============
 @app.post("/test/mock-sensor-event")
@@ -1681,10 +1797,13 @@ async def mock_sensor_event(
     Example: POST /test/mock-sensor-event?zone_id=01-PK&signal=true&speed=25
     """
     if not consumer:
-        return {
-            "status": "error",
-            "message": "EventHub Consumer가 활성화되지 않았습니다"
-        }, 400
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "EventHub Consumer가 활성화되지 않았습니다"
+            }
+        )
     
     event_data = {
         "timestamp": datetime.now().isoformat(),
@@ -1719,10 +1838,13 @@ async def mock_sensor_burst(
     Example: POST /test/mock-sensor-burst?zone_id=01-PK&count=50&speed=20
     """
     if not consumer:
-        return {
-            "status": "error",
-            "message": "EventHub Consumer가 활성화되지 않았습니다"
-        }, 400
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "EventHub Consumer가 활성화되지 않았습니다"
+            }
+        )
     
     added_count = 0
     for i in range(count):

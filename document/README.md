@@ -21,7 +21,7 @@
 ```
 센서 시뮬레이터          Azure 클라우드                    사용자
 ─────────────────────────────────────────────────────────────
-센서 이벤트 생성   →  IoT Hub  →  EventHub  →  Backend  →  Frontend
+센서 이벤트 생성   →  IoT Hub  →  IoT의 EventHub  →  Backend  →  Frontend
 (port 5001)                                   (port 8000)  (port 3000)
                                                  ↓
                                           Azure PostgreSQL
@@ -48,30 +48,6 @@
 - Azure 구독 (LogisticsIoTHub, 이벤트 허브)
 - .env 파일 설정 (예: `AZ_POSTGRE_DATABASE_URL`, `EVENTHUB_CONNECTION_STRING`)
 
-### 로컬 개발 환경 구성
-
-```bash
-# 1. 리포지토리 클론
-git clone <repo-url>
-cd AzureRailLogistics
-
-# 2. 백엔드 시작
-cd backend
-pip install -r requirements.txt
-python backend_main.py
-# → http://localhost:8000 (API 서버)
-
-# 3. 센서 시뮬레이터 시작 (별도 터미널)
-cd sensor_simulator
-pip install -r requirements.txt
-python api_server.py
-# → http://localhost:5001 (센서 제어 API)
-
-# 4. 프론트엔드 시작 (별도 터미널)
-cd frontend
-npm install
-REACT_APP_API_URL=http://localhost:8000 npm start
-# → http://localhost:3000 (시각화)
 ```
 
 ---
