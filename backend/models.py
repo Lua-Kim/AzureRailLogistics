@@ -64,11 +64,8 @@ class Preset(Base):
     """프리셋 메타데이터"""
     __tablename__ = "presets"
     
-    id = Column(Integer, primary_key=True, index=True)
-    preset_key = Column(String, unique=True, index=True, nullable=False)  # e.g., "mfc", "dc"
+    preset_key = Column(String, primary_key=True, index=True, nullable=False)  # e.g., "mfc", "dc"
     preset_name = Column(String, nullable=False)  # e.g., "MFC 표준 구성"
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # 관계 설정
     preset_zones = relationship("PresetZone", back_populates="preset", cascade="all, delete-orphan")
