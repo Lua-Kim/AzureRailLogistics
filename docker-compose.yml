@@ -20,6 +20,8 @@ services:
       - simulator
     restart: unless-stopped
 
+
+  
   simulator:
     image: azcr01.azurecr.io/logistics-simulator:latest
     container_name: logistics-simulator
