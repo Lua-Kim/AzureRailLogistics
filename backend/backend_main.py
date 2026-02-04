@@ -1593,27 +1593,29 @@ async def reset_simulator(db: Session = Depends(data_db)):
 async def get_all_presets(db: Session = Depends(data_db)):
     """사용 가능한 모든 프리셋 목록 조회"""
     try:
-        from sqlalchemy import select
-        # presets 테이블에서 모든 프리셋 조회
+        print("[DEBUG] /presets 엔드포인트 호출됨!")
+        
+        # 직접 SQL로 확인
+        presets_count = db.execute(text("SELECT COUNT(*) FROM presets")).scalar()
+        print(f"[DEBUG] SQL: presets 테이블 행 개수: {presets_count}")
+        
+        # ORM으로 조회
         presets = db.query(Preset).all()
+        print(f"[DEBUG] ORM: Preset 객체 개수: {len(presets) if presets else 0}")
         
-        print(f"[DEBUG] /presets 호출됨")
-        print(f"[DEBUG] Preset 테이블 행 개수: {len(presets) if presets else 0}")
-        for p in presets:
-            print(f"[DEBUG]   - {p.preset_key}: {p.preset_name}")
+        if presets:
+            for p in presets:
+                print(f"[DEBUG]   - {p.preset_key}: {p.preset_name}")
         
-        if not presets:
-            print(f"[DEBUG] Preset이 비어있음, 기본값 반환")
-            return {
-                "presets": [],
-                "message": "저장된 프리셋이 없습니다."
-            }
+        if not presets or presets_count == 0:
+            print(f"[DEBUG] Preset이 비어있음, 빈 리스트 반환")
+            return {"presets": []}
         
         result = []
         for preset in presets:
             zones = db.query(PresetZone).filter(PresetZone.preset_key == preset.preset_key).all()
-            total_lines = sum(z.lines for z in zones)
-            total_sensors = sum(z.sensors for z in zones)
+            total_lines = sum(z.lines for z in zones) if zones else 0
+            total_sensors = sum(z.sensors for z in zones) if zones else 0
             
             result.append({
                 "preset_key": preset.preset_key,
@@ -1632,6 +1634,7 @@ async def get_all_presets(db: Session = Depends(data_db)):
                 ]
             })
         
+        print(f"[DEBUG] 최종 결과: {len(result)}개 프리셋 반환")
         return {"presets": result}
         
     except Exception as e:
