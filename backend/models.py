@@ -58,3 +58,40 @@ class SensorEvent(Base):
     
     class Config:
         from_attributes = True
+
+
+class Preset(Base):
+    """프리셋 메타데이터"""
+    __tablename__ = "presets"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    preset_key = Column(String, unique=True, index=True, nullable=False)  # e.g., "mfc", "dc"
+    preset_name = Column(String, nullable=False)  # e.g., "MFC 표준 구성"
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # 관계 설정
+    preset_zones = relationship("PresetZone", back_populates="preset", cascade="all, delete-orphan")
+    
+    class Config:
+        from_attributes = True
+
+
+class PresetZone(Base):
+    """프리셋별 존 설정"""
+    __tablename__ = "preset_zones"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    preset_key = Column(String, ForeignKey("presets.preset_key"), index=True, nullable=False)
+    zone_id = Column(String, nullable=False)  # e.g., "01-IB"
+    zone_name = Column(String)  # e.g., "입고"
+    lines = Column(Integer)  # 라인 개수
+    length = Column(Float)  # 라인 길이 (m)
+    sensors = Column(Integer)  # 센서 개수
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 관계 설정
+    preset = relationship("Preset", back_populates="preset_zones")
+    
+    class Config:
+        from_attributes = True

@@ -1,7 +1,8 @@
 import axios from 'axios';
 
 // API 베이스 URL - Azure VM의 백엔드 서버 주소
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://20.196.224.42:8000';
+// .env 파일에서 REACT_APP_API_URL 설정 필요
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
