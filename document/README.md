@@ -1,8 +1,450 @@
-# AzureRailLogistics Project Documentation
+# AzureRailLogistics - 물류센터 실시간 시뮬레이션 및 모니터링 시스템
 
-## 1. 프로젝트 개요
-이 프로젝트는 물류 센터의 현황을 실시간으로 모니터링하고 분석하는 React 기반의 대시보드 애플리케이션입니다. 
-전체적인 운영 현황을 파악하는 매크로(Macro) 뷰와 특정 구역의 세부 데이터를 분석하는 마이크로(Micro) 뷰로 구성되어 있습니다.
+## 📋 프로젝트 개요
+
+**목적**: Azure 클라우드 기반의 물류센터 바스켓 운송 시뮬레이션 및 센서 데이터 수집 시스템
+
+**구성**:
+- 🎨 **Frontend**: React 기반 실시간 시각화
+- 🔧 **Backend**: Python FastAPI 서버 (데이터 관리 및 API)
+- 📡 **Sensor Simulator**: 물류센터 센서 데이터 생성 및 IoT Hub 전송
+- ☁️ **Azure Infrastructure**: IoT Hub, EventHub, PostgreSQL
+
+**현재 상태**: ✅ 운영 (2026-02-02 기준)
+
+---
+
+## 🏗️ 시스템 아키텍처
+
+### 전체 흐름
+
+```
+센서 시뮬레이터          Azure 클라우드                    사용자
+─────────────────────────────────────────────────────────────
+센서 이벤트 생성   →  IoT Hub  →  EventHub  →  Backend  →  Frontend
+(port 5001)                                   (port 8000)  (port 3000)
+                                                 ↓
+                                          Azure PostgreSQL
+```
+
+### 주요 컴포넌트
+
+| 컴포넌트 | 위치 | 포트 | 역할 |
+|---------|------|------|------|
+| **Backend** | VM | 8000 | API 서버, EventHub 소비, DB 관리 |
+| **Sensor Simulator** | VM | 5001 | 센서 데이터 생성, IoT Hub 전송 |
+| **Frontend** | 로컬/클라우드 | 3000 | 실시간 시각화, 제어 |
+| **Azure IoT Hub** | 클라우드 | - | 센서 장치 연결, EventHub 게이트웨이 |
+| **Azure EventHub** | 클라우드 | - | 이벤트 스트림 처리 |
+| **PostgreSQL** | Azure | 5432 | Zone, Line, Sensor Event 저장 |
+
+---
+
+## 🚀 빠른 시작 (Quick Start)
+
+### 전제조건
+- Python 3.11+
+- Node.js 16+
+- Azure 구독 (LogisticsIoTHub, 이벤트 허브)
+- .env 파일 설정 (예: `AZ_POSTGRE_DATABASE_URL`, `EVENTHUB_CONNECTION_STRING`)
+
+### 로컬 개발 환경 구성
+
+```bash
+# 1. 리포지토리 클론
+git clone <repo-url>
+cd AzureRailLogistics
+
+# 2. 백엔드 시작
+cd backend
+pip install -r requirements.txt
+python backend_main.py
+# → http://localhost:8000 (API 서버)
+
+# 3. 센서 시뮬레이터 시작 (별도 터미널)
+cd sensor_simulator
+pip install -r requirements.txt
+python api_server.py
+# → http://localhost:5001 (센서 제어 API)
+
+# 4. 프론트엔드 시작 (별도 터미널)
+cd frontend
+npm install
+REACT_APP_API_URL=http://localhost:8000 npm start
+# → http://localhost:3000 (시각화)
+```
+
+---
+
+## 📁 프로젝트 구조
+
+```
+AzureRailLogistics/
+├── backend/                    # FastAPI 백엔드
+│   ├── backend_main.py         # 메인 애플리케이션
+│   ├── database.py             # PostgreSQL 연결 관리
+│   ├── models.py               # SQLAlchemy 모델 (Zone, Line, Event)
+│   ├── schemas.py              # Pydantic 스키마
+│   ├── eventhub_consumer.py    # Azure EventHub 소비자
+│   ├── basket_manager.py       # 바스켓 풀 관리
+│   └── requirements.txt
+│
+├── sensor_simulator/           # 센서 데이터 생성
+│   ├── api_server.py           # FastAPI 제어 서버
+│   ├── sensor_data_generator.py # 센서 이벤트 생성
+│   ├── basket_manager.py       # 바스켓 풀 동기화
+│   ├── basket_movement.py      # 바스켓 이동 시뮬레이션
+│   ├── database.py             # DB 쿼리 헬퍼
+│   └── requirements.txt
+│
+├── frontend/                   # React 프론트엔드
+│   ├── src/
+│   │   ├── BasketVisualizationPage.jsx  # 메인 시각화 (바스켓 투입/이동/병목)
+│   │   ├── App.js              # 라우터 설정
+│   │   ├── api.js              # API 클라이언트
+│   │   └── theme.js            # 테마/스타일
+│   └── package.json
+│
+├── document/                   # 문서
+│   ├── README.md               # 이 파일
+│   ├── ARCHITECTURE_DESIGN_DECISIONS.md  # 아키텍처 결정사항
+│   ├── AZURE_IOT_EDGE_SETUP.md # Azure 배포 가이드
+│   └── ...
+│
+└── .env                        # 환경 변수 (git ignore)
+```
+
+---
+
+## 🔌 API 명세
+
+### Backend API (http://localhost:8000)
+
+#### 기본 상태
+```
+GET /health
+GET /health/db
+GET /health/consumer
+```
+
+#### Zone & Line 설정
+```
+GET    /zones                          # 모든 존 조회
+GET    /zones/config                   # 존 설정 상세 조회
+POST   /zones/config                   # 새 존 생성
+PUT    /zones/config/{zone_id}         # 존 업데이트
+DELETE /zones/config/{zone_id}         # 존 삭제
+POST   /zones/config/batch             # 여러 존 일괄 설정
+```
+
+#### 바스켓 관리
+```
+GET    /baskets                        # 모든 바스켓 조회
+POST   /api/baskets/create             # 바스켓 생성
+GET    /baskets/{basket_id}            # 특정 바스켓 조회
+```
+
+#### 센서 이벤트
+```
+GET    /api/sensor-events/db           # DB 저장된 센서 이벤트 조회
+GET    /api/sensor-events/stats        # 센서 이벤트 통계
+GET    /events/latest                  # 최근 이벤트
+GET    /events/stats                   # 이벤트 통계
+```
+
+#### 병목 감지
+```
+GET    /bottlenecks                    # 병목 발생 존 및 바스켓 조회
+```
+
+#### 시뮬레이터 제어
+```
+GET    /simulator/status               # 시뮬레이터 상태
+POST   /simulator/start                # 센서 시뮬레이터 시작
+POST   /simulator/stop                 # 센서 시뮬레이터 정지
+POST   /simulator/reset                # 시뮬레이터 초기화
+```
+
+### Sensor Simulator API (http://localhost:5001)
+
+```
+GET    /simulator/status               # 상태 조회
+POST   /simulator/start                # 센서 생성 시작
+POST   /simulator/stop                 # 센서 생성 중지
+POST   /simulator/reset                # 재초기화 및 재시작
+```
+
+---
+
+## 🎯 주요 기능
+
+### 1. 실시간 바스켓 시각화
+- **Zone별 Line 시각화**: 각 구역의 라인을 트랙으로 표시
+- **바스켓 이동 추적**: 실시간 위치 업데이트 (100ms 주기)
+- **병목 감지**: 정지된 바스켓 자동 감지 및 표시 (빨강)
+- **센서 상태**: 각 라인의 센서 활성화 상태 표시
+
+### 2. 바스켓 관리
+- **순차 투입**: 대기열 기반 순차 투입 (충돌 방지)
+- **라인 분산**: 혼잡도가 낮은 라인 우선 배분
+- **자동 회수**: 도착한 바스켓 자동 회수
+- **기본 개수**: 20개 바스켓
+
+### 3. 센서 데이터 수집
+- **IoT Hub 통합**: Azure IoT Hub를 통한 센서 데이터 수신
+- **EventHub 처리**: 실시간 이벤트 스트림 처리
+- **시간대 정렬**: KST (UTC+9) 기반 타임스탠프
+- **배치 저장**: 8~10개 이벤트/초 PostgreSQL 저장
+
+### 4. 디버그 및 모니터링
+- **로깅**: 모든 API 호출, EventHub 수신, DB 저장 로깅
+- **상태 확인**: 헬스체크 엔드포인트
+- **통계**: 구역별 이벤트 통계
+
+---
+
+## ⚙️ 환경 설정
+
+### .env 파일 예시
+
+```bash
+# Azure PostgreSQL
+AZ_POSTGRE_DATABASE_URL=postgresql://logis_admin:!postgres16@psql-logistics-kr.postgres.database.azure.com:5432/logistics?sslmode=require
+
+# Azure IoT Hub
+IOT_HUB_DEVICE_CONNECTION_STRING=HostName=LogisticsIoTHub.azure-devices.net;DeviceId=logistics-edge-01;SharedAccessKey=...
+
+# Azure EventHub (IoT Hub 호환)
+EVENTHUB_CONNECTION_STRING=Endpoint=sb://iothub-ns-...servicebus.windows.net/;SharedAccessKeyName=owner;SharedAccessKey=...
+
+# 프론트엔드
+REACT_APP_API_URL=http://20.196.224.42:8000
+```
+
+---
+
+## 🐳 Docker 배포
+
+### 이미지 빌드
+
+```bash
+# 백엔드
+docker build -t logistics-backend:latest ./backend
+
+# 센서 시뮬레이터
+docker build -t logistics-sensor-simulator:latest ./sensor_simulator
+```
+
+### 컨테이너 실행
+
+```bash
+# 백엔드
+docker run -d \
+  -p 8000:8000 \
+  -e AZ_POSTGRE_DATABASE_URL=... \
+  -e EVENTHUB_CONNECTION_STRING=... \
+  --name logistics-backend \
+  --network host \
+  logistics-backend:latest
+
+# 센서 시뮬레이터
+docker run -d \
+  -p 5001:5001 \
+  -e IOT_HUB_DEVICE_CONNECTION_STRING=... \
+  -e AZ_POSTGRE_DATABASE_URL=... \
+  --name logistics-sensor-simulator \
+  --network host \
+  logistics-sensor-simulator:latest
+```
+
+---
+
+## 📊 데이터베이스 스키마
+
+### logistics_zones
+```sql
+CREATE TABLE logistics_zones (
+  zone_id VARCHAR PRIMARY KEY,
+  name VARCHAR NOT NULL,
+  lines INT,              -- 라인 개수
+  length FLOAT,          -- 총 길이 (m)
+  sensors INT,           -- 센서 개수
+  created_at TIMESTAMP
+);
+```
+
+### logistics_lines
+```sql
+CREATE TABLE logistics_lines (
+  zone_id VARCHAR,
+  line_id VARCHAR,
+  length FLOAT,          -- 라인 길이
+  sensors INT,           -- 센서 개수
+  PRIMARY KEY (zone_id, line_id)
+);
+```
+
+### sensor_events
+```sql
+CREATE TABLE sensor_events (
+  id SERIAL PRIMARY KEY,
+  zone_id VARCHAR,
+  line_id VARCHAR,
+  sensor_id VARCHAR,
+  basket_id VARCHAR,
+  signal BOOLEAN,        -- 감지 여부
+  speed FLOAT,          -- 속도 (m/s)
+  created_at TIMESTAMP
+);
+```
+
+---
+
+## 🔄 데이터 흐름
+
+### 1. 센서 → 클라우드
+```
+sensor_data_generator → IoT Hub → EventHub → Backend → PostgreSQL
+(KST 타임스탠프)      (장치 수신)   (스트림)    (소비)     (저장)
+```
+
+### 2. 백엔드 → 프론트엔드
+```
+Frontend (GET /baskets)
+    ↓
+Backend (메모리 바스켓 풀 + DB)
+    ↓
+실시간 시각화
+```
+
+### 3. 프론트엔드 → 백엔드
+```
+사용자 작업 (바스켓 투입)
+    ↓
+POST /api/baskets/create
+    ↓
+Backend 바스켓 풀 업데이트 + DB 저장
+    ↓
+시뮬레이터 제어
+```
+
+---
+
+## 🚨 주요 기능 및 로직
+
+### 바스켓 투입 규칙 (deployment_queue_task)
+1. 라인에 바스켓 없음 → 즉시 투입
+2. 라인에 바스켓 있음 + 마지막 투입 후 0.8초 경과 → 투입 가능
+3. 그 외 → 대기
+
+### 바스켓 이동 (update_basket_positions_task)
+1. 100ms마다 실행
+2. 각 바스켓의 현재 위치에 해당하는 구간 속도 적용
+3. 라인 끝 도달 시 'arrived' 상태로 전환
+4. 앞 바스켓으로 인한 정지 감지 시 병목 플래그 설정
+
+### 바스켓 회수 (recycle_baskets_task)
+1. 5초마다 실행
+2. 'arrived' 상태 바스켓 → 'available'로 전환
+3. 재사용 가능 상태로 리셋
+
+---
+
+## 🔧 트러블슈팅
+
+### EventHub 연결 실패
+```
+Error: "CBS Token authentication failed"
+→ EVENTHUB_CONNECTION_STRING의 SharedAccessKey 확인
+```
+
+### 센서 데이터 미수신
+```
+확인사항:
+1. 센서 시뮬레이터 실행 여부: GET http://localhost:5001/simulator/status
+2. Backend 로그: "이벤트 수신: zone_id=..."
+3. PostgreSQL 저장: SELECT COUNT(*) FROM sensor_events;
+```
+
+### 바스켓이 이동하지 않음
+```
+확인사항:
+1. 백엔드 로그: "Basket Pool 초기화 완료" 확인
+2. 바스켓 풀 상태: GET http://localhost:8000/baskets
+3. 시뮬레이터 상태: GET http://localhost:8000/simulator/status
+```
+
+---
+
+## 📝 로그 및 모니터링
+
+### 주요 로그 메시지
+
+**정상 작동:**
+```
+[센서 시뮬레이션] 메시지 스트리밍 스레드 시작됨
+[EventHubConsumer] ✅ EventHub 연결 성공, 메시지 대기 중...
+[EventHubConsumer] 이벤트 수신: zone_id=01-PK, signal=False, speed=0.0
+✅ [HH:MM:SS] 8개 이벤트 DB 저장 완료
+```
+
+**오류 감지:**
+```
+❌ [HH:MM:SS] DB 저장 실패: ...
+[EventHubConsumer] ❌ EventHub 연결 실패: ...
+```
+
+---
+
+## 🤝 관련 문서
+
+- [ARCHITECTURE_DESIGN_DECISIONS.md](ARCHITECTURE_DESIGN_DECISIONS.md) - 아키텍처 의사결정 및 멀티센터 확장 전략
+- [AZURE_IOT_EDGE_SETUP.md](AZURE_IOT_EDGE_SETUP.md) - Azure 배포 가이드
+- [IMPROVEMENTS.md](IMPROVEMENTS.md) - 개선 로드맵
+
+---
+
+## 📅 버전 이력
+
+**2026-02-02**: 현행 시스템 정리
+- EventHub 통합 완료
+- UI/UX 최적화 (Guide Panel, Statistics 콤팩트화, 병목 인라인 표시)
+- 기본 투입 바스켓 20개로 변경
+- 멀티센터 아키텍처 설계 문서 작성
+
+---
+
+## 📋 지난 로그 (Legacy)
+
+> 이 섹션은 기존 아키텍처 및 레거시 컴포넌트에 대한 참고용 문서입니다.
+> 2026-02-02 업데이트 이전의 구조를 담고 있습니다.
+
+### 이전 구조 (2026-01-30 이전)
+
+**페이지 구성 (사용 중단):**
+- `DashboardPage.jsx` - 전체 물류 센터의 KPI 및 구역별 상태 (레거시)
+- `ZoneAnalyticsPage.jsx` - 특정 구역 상세 분석 (레거시)
+
+**센서 어댑터 시스템 (사용 중단):**
+- Simulator vs Real Sensor 선택 구조
+- REST API / MQTT / MODBUS 지원 (현재 불필요)
+
+**메시징 시스템 (마이그레이션 완료):**
+- 구 시스템: Kafka (로컬 메시징)
+- 신 시스템: Azure EventHub (클라우드 기반)
+
+### 마이그레이션 완료 항목
+
+| 구성요소 | 구 방식 | 신 방식 | 상태 |
+|---------|--------|--------|------|
+| 센서 데이터 수집 | 로컬 센서 어댑터 | Azure IoT Hub | ✅ 완료 |
+| 메시징 | Kafka | EventHub | ✅ 완료 |
+| 데이터베이스 | SQLite | Azure PostgreSQL | ✅ 완료 |
+| 시각화 | DashboardPage | BasketVisualizationPage | ✅ 완료 |
+
+### 참고 자료
+
+더 자세한 아키텍처 변경 이력은 [WORK_SUMMARY_2026-01-30.md](WORK_SUMMARY_2026-01-30.md)를 참조하세요.
 
 ## 2. 파일 구조 (File Structure)
 *   **Root**: `c:\Users\EL0100\Desktop\AzureRailLogistics\`

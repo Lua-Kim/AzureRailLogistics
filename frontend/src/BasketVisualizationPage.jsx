@@ -379,7 +379,7 @@ const BasketVisualizationPage = () => {
   const [baskets, setBaskets] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [basketCount, setBasketCount] = useState(5);
+  const [basketCount, setBasketCount] = useState(20);
   const [lineSpeedZones, setLineSpeedZones] = useState({});
   const [lineCapacities, setLineCapacities] = useState({});
   const [bottlenecksByZone, setBottlenecksByZone] = useState({});
