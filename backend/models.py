@@ -78,14 +78,12 @@ class PresetZone(Base):
     """프리셋별 존 설정"""
     __tablename__ = "preset_zones"
     
-    id = Column(Integer, primary_key=True, index=True)
-    preset_key = Column(String, ForeignKey("presets.preset_key"), index=True, nullable=False)
-    zone_id = Column(String, nullable=False)  # e.g., "01-IB"
+    preset_key = Column(String, ForeignKey("presets.preset_key"), primary_key=True, nullable=False)
+    zone_id = Column(String, primary_key=True, nullable=False)  # e.g., "01-IB"
     zone_name = Column(String)  # e.g., "입고"
     lines = Column(Integer)  # 라인 개수
     length = Column(Float)  # 라인 길이 (m)
     sensors = Column(Integer)  # 센서 개수
-    created_at = Column(DateTime, default=datetime.utcnow)
     
     # 관계 설정
     preset = relationship("Preset", back_populates="preset_zones")
