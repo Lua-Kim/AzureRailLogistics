@@ -53,3 +53,4 @@ deployment.json
 __pycache__/
 document/azure vm ssh.md
 deployment.template.json
+.env.dev.example

@@ -26,7 +26,10 @@ class SensorEventConsumer:
         if not connection_str:
             raise ValueError("EVENTHUB_CONNECTION_STRING 환경 변수가 설정되지 않았습니다.")
         
-        consumer_group = os.getenv("EVENTHUB_CONSUMER_GROUP", "$Default")
+        consumer_group = os.getenv("EVENTHUB_CONSUMER_GROUP") # 기본값은 $Default 없는 걸로 수정함. 26.02.05
+        if not consumer_group or consumer_group.strip() == "":
+            consumer_group = "$Default"
+            print(f"[EventHubConsumer] WARNING: EVENTHUB_CONSUMER_GROUP not set, using fallback: $Default")
         
         self.connection_str = connection_str
         self.consumer_group = consumer_group
@@ -43,7 +46,7 @@ class SensorEventConsumer:
         
         # ====== 배치 저장용 ======
         self.event_buffer = []      # 이벤트 버퍼
-        self.buffer_size = 20       # 배치 크기 (20개로 증가)
+        self.buffer_size = 200      # 배치 크기 (200개로 증가)
         self.buffer_lock = threading.Lock()
         self.flush_thread = None    # 주기적 플러시 스레드
         self.buffer_flush_interval = 2  # 2초마다 플러시
@@ -119,12 +122,11 @@ class SensorEventConsumer:
             zone_id = event_data.get('zone_id', 'N/A')
             signal = event_data.get('signal', False)
             speed = event_data.get('speed', 0)
-            
-            if signal:
-                sensor_id = event_data.get('sensor_id', 'N/A')
-                basket_id = event_data.get('basket_id', 'N/A')
-                print(f"[EventHubConsumer] ✅ SIGNAL DETECTED: zone_id={zone_id}, sensor_id={sensor_id}, basket_id={basket_id}, speed={speed}")
-            
+       
+            sensor_id = event_data.get('sensor_id', 'N/A')
+            basket_id = event_data.get('basket_id', 'N/A')
+            print(f"[EventHubConsumer] ✅ SIGNAL DETECTED: zone_id={zone_id}, sensor_id={sensor_id}, signal={signal}, basket_id={basket_id}, speed={speed}")
+        
             # 바스켓 위치 업데이트 (센서 신호가 감지되었을 때)
             if self.basket_pool and event_data.get("signal"):
                 self._update_basket_position(event_data)
@@ -141,6 +143,7 @@ class SensorEventConsumer:
                 # 버퍼가 가득 차면 즉시 플러시
                 if len(self.event_buffer) >= self.buffer_size:
                     self._flush_buffer()
+                    print(f"[EventHubConsumer] Buffer full, flushed {self.buffer_size} events") 
             
             # 체크포인트 업데이트
             await partition_context.update_checkpoint(event)
@@ -212,8 +215,11 @@ class SensorEventConsumer:
                 signal_true_count = 0
                 
                 for event_data in events:
+                    # Parse timestamp and keep timezone info (KST will be stored as-is)
+                    timestamp = datetime.fromisoformat(event_data["timestamp"])
+                    
                     sensor_kwargs = {
-                        "timestamp": datetime.fromisoformat(event_data["timestamp"]),
+                        "timestamp": timestamp,
                         "zone_id": event_data.get("zone_id", ""),
                         "basket_id": event_data.get("basket_id"),
                         "sensor_id": event_data.get("sensor_id", ""),

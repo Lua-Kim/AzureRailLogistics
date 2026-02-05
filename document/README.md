@@ -278,6 +278,30 @@ CREATE TABLE sensor_events (
 
 ## 🔄 데이터 흐름
 
+[백엔드 컨테이너]                    [시뮬레이터 컨테이너]
+├─ BasketPool (20개)               ├─ BasketPool (100개)
+├─ 배포된 바스켓 관리              ├─ 로컬 시뮬레이션 바스켓
+└─ 독립적인 메모리                 └─ 독립적인 메모리
+     ↓                                    ↓
+     └─────────── REST API 호출 ──────────┘
+                (조회만 함)
+
+
+
+
+[백엔드 바스켓] + [로컬 시뮬레이션 바스켓]
+        ↓
+[센서 시뮬레이터] → 신호 감지
+        ↓
+[IoT Hub] → 메시지 전송 (signal=True만)
+        ↓
+[EventHub Consumer] → 처리 및 저장
+        ↓
+[PostgreSQL 데이터베이스] ✅
+
+
+
+
 ### 1. 센서 → 클라우드
 ```
 sensor_data_generator → IoT Hub → EventHub → Backend → PostgreSQL
